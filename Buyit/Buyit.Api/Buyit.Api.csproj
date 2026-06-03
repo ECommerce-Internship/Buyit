@@ -16,4 +16,9 @@
     <Folder Include="Extensions\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Buyit.Application\Buyit.Application.csproj" />
+    <ProjectReference Include="..\Buyit.Infrastructure\Buyit.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
