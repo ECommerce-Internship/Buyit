@@ -1,6 +1,6 @@
 <Solution>
   <Project Path="Buyit.Api/Buyit.Api.csproj" />
-  <Project Path="Buyit.Application/Buyit.Application.csproj" Id="7546c3e3-37f6-4e34-a114-ef27857ac9dd" />
-  <Project Path="Buyit.Domain/Buyit.Domain.csproj" Id="8241dd3b-4254-49af-9157-0089994b5e83" />
-  <Project Path="Buyit.Infrastructure/Buyit.Infrastructure.csproj" Id="3aa8a755-f748-4656-ab08-0115ad04c935" />
+  <Project Path="Buyit.Application/Buyit.Application.csproj" />
+  <Project Path="Buyit.Domain/Buyit.Domain.csproj" />
+  <Project Path="Buyit.Infrastructure/Buyit.Infrastructure.csproj" />
 </Solution>
