@@ -1,3 +1,6 @@
 <Solution>
   <Project Path="Buyit.Api/Buyit.Api.csproj" />
+  <Project Path="Buyit.Application/Buyit.Application.csproj" />
+  <Project Path="Buyit.Domain/Buyit.Domain.csproj" />
+  <Project Path="Buyit.Infrastructure/Buyit.Infrastructure.csproj" />
 </Solution>
