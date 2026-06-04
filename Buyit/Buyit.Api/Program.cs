@@ -1,16 +1,17 @@
+using Buyit.Api.Middleware;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- 1. REGISTER SERVICES ----------
+// Register Services
 builder.Services.AddControllers();              // enables controller-based endpoints
 
-// Built-in OpenAPI document (kept from the template; harmless to leave on)
 builder.Services.AddOpenApi();
 
-// Swashbuckle (Swagger) — this is what provides the interactive /swagger UI page.
+// swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Development-only CORS policy (permissive — DEV USE ONLY, never in production)
+// CORS Policy
 const string DevCors = "DevCors";
 builder.Services.AddCors(options =>
 {
@@ -22,7 +23,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// ---------- 2. CONFIGURE THE HTTP PIPELINE (order matters) ----------
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// HTTP pipeline 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();       // serves the built-in OpenAPI JSON at /openapi/v1.json
@@ -35,3 +38,5 @@ app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
 app.UseAuthorization();     // placeholder for when auth is added later
 app.MapControllers();       // route requests to your controllers
 app.Run();                  // start listening for requests
+
+
