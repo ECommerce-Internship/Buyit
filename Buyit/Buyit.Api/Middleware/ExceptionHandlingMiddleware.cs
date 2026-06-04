@@ -24,14 +24,13 @@ namespace Buyit.Api.Middleware
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An unhandled exception occurred: {Message}", ex.Message);
                 await HandleExceptionAsync(context, ex);
             }
         }
 
-        private static async Task HandleExceptionAsync(HttpContext context, Exception exception)
+        private async Task HandleExceptionAsync(HttpContext context, Exception exception)
         {
-            context.Response.ContentType = "application/json";
+            context.Response.ContentType = "application/problem+json";
 
             var statusCode = exception switch
             {
@@ -45,10 +44,23 @@ namespace Buyit.Api.Middleware
 
             context.Response.StatusCode = (int)statusCode;
 
+            if (statusCode == HttpStatusCode.InternalServerError)
+                _logger.LogError(exception, "Unhandled exception on {Path}", context.Request.Path);
+            else
+                _logger.LogWarning("Handled {StatusCode} on {Path}: {Message}", (int)statusCode, context.Request.Path, exception.Message);
+
             var problemDetails = new ProblemDetails
             {
                 Status = (int)statusCode,
-                Title = statusCode.ToString(),
+                Title = statusCode switch
+                {
+                    HttpStatusCode.BadRequest => "Bad Request",
+                    HttpStatusCode.Unauthorized => "Unauthorized",
+                    HttpStatusCode.Forbidden => "Forbidden",
+                    HttpStatusCode.NotFound => "Not Found",
+                    HttpStatusCode.Conflict => "Conflict",
+                    _ => "Internal Server Error"
+                },
                 Detail = statusCode == HttpStatusCode.InternalServerError
                     ? "An unexpected error occurred on the server." 
                     : exception.Message, 
@@ -57,10 +69,11 @@ namespace Buyit.Api.Middleware
 
             if (exception is ValidationException validationException)
             {
-                problemDetails.Extensions.Add("errors", validationException.Errors);
+                problemDetails.Extensions["errors"] = validationException.Errors;
             }
 
-            var result = JsonSerializer.Serialize(problemDetails);
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var result = JsonSerializer.Serialize(problemDetails, options);
             await context.Response.WriteAsync(result);
         }
     }

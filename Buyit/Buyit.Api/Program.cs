@@ -1,5 +1,4 @@
 using Buyit.Api.Middleware;
-using Buyit.Domain.Exceptions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,4 +38,5 @@ app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
 app.UseAuthorization();     // placeholder for when auth is added later
 app.MapControllers();       // route requests to your controllers
 app.Run();                  // start listening for requests
+
 
