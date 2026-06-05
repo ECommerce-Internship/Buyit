@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Buyit.Domain.Entities;
 
 /// <summary>
@@ -8,7 +10,10 @@ public class Category
 {
     public int Id { get; set; }
 
+    [Required, MaxLength(100)]
     public string Name { get; set; } = string.Empty;
+
+    [MaxLength(1000)]
     public string? Description { get; set; }
 
     // Self-referencing FK: null = top-level category; a value = subcategory.

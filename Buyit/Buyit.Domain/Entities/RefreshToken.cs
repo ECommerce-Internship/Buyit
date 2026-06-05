@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Buyit.Domain.Entities;
 
 /// <summary>
@@ -8,6 +10,7 @@ public class RefreshToken
 {
     public int Id { get; set; }
 
+    [Required, MaxLength(256)]
     public string Token { get; set; } = string.Empty;
 
     public DateTime ExpiresAt { get; set; }

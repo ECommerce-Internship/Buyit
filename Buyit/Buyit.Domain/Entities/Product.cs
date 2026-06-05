@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Buyit.Domain.Entities;
 
 /// <summary>A sellable item in the catalogue.</summary>
@@ -5,15 +7,20 @@ public class Product
 {
     public int Id { get; set; }
 
+    [Required, MaxLength(200)]
     public string Name { get; set; } = string.Empty;
+
+    [Required, MaxLength(2000)]
     public string Description { get; set; } = string.Empty;
 
     // Stock Keeping Unit — the unique business code for the product.
+    [Required, MaxLength(50)]
     public string Sku { get; set; } = string.Empty;
 
     public decimal Price { get; set; }
 
     // Public URL of the product image (Azure Blob later). Optional.
+    [MaxLength(2048)]
     public string? ImageUrl { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

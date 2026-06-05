@@ -136,6 +136,11 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<Product>().HasIndex(p => p.Sku).IsUnique();
             modelBuilder.Entity<Coupon>().HasIndex(c => c.Code).IsUnique();
 
+            // Refresh tokens are looked up by their value on every session refresh.
+            // A unique index turns that O(n) table scan into a B-tree seek and
+            // guarantees no two sessions ever share a token value.
+            modelBuilder.Entity<RefreshToken>().HasIndex(rt => rt.Token).IsUnique();
+
             // ========== DECIMAL PRECISION ==========
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.TotalAmount).HasPrecision(18, 2);

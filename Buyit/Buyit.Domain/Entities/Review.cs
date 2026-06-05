@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Buyit.Domain.Entities;
 
 /// <summary>
@@ -11,6 +13,8 @@ public class Review
 
     // 1 to 5 (range enforced via a check constraint in AppDbContext).
     public int Rating { get; set; }
+
+    [MaxLength(2000)]
     public string? Comment { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
