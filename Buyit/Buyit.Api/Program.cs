@@ -1,4 +1,6 @@
 using Buyit.Api.Middleware;
+using Microsoft.EntityFrameworkCore;
+using Buyit.Infrastructure.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +23,21 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod());
 });
 
+// EF Core — register the database context
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 var app = builder.Build();
+
+// Seed the database in Development only
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();      // apply any pending migrations
+    DbInitializer.Seed(db);     // insert seed data (runs once)
+}
+
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
