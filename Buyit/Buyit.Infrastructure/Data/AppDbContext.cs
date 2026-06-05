@@ -146,6 +146,12 @@ namespace Buyit.Infrastructure.Data
             // ========== CHECK CONSTRAINT ==========
             modelBuilder.Entity<Review>()
                 .ToTable(t => t.HasCheckConstraint("CK_Review_Rating", "[Rating] BETWEEN 1 AND 5"));
+
+            // ========== GLOBAL QUERY FILTERS (soft delete) ==========
+            // Every query against Products automatically excludes soft-deleted rows, so
+            // "deleted" products vanish from the catalogue without being physically removed.
+            // Use .IgnoreQueryFilters() in admin/reporting queries that need to see them.
+            modelBuilder.Entity<Product>().HasQueryFilter(p => !p.IsDeleted);
         }
     }
 }

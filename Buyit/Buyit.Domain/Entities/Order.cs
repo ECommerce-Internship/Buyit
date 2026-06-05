@@ -14,6 +14,16 @@ public class Order
     // Total captured at purchase time.
     public decimal TotalAmount { get; set; }
 
+    // ---- Shipping address SNAPSHOT ----
+    // Captured onto the order at checkout, NOT read from the User. The customer can change
+    // their profile address after ordering, but the order must always ship to where it was
+    // placed. Stored as structured fields so we can later filter/report by city or country.
+    public string ShippingLine1 { get; set; } = string.Empty;
+    public string? ShippingLine2 { get; set; }
+    public string ShippingCity { get; set; } = string.Empty;
+    public string ShippingPostalCode { get; set; } = string.Empty;
+    public string ShippingCountry { get; set; } = string.Empty;
+
     // Each order belongs to one user.
     public int UserId { get; set; }
     public User User { get; set; } = null!;
