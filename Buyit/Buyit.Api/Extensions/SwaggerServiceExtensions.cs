@@ -24,8 +24,8 @@ public static class SwaggerServiceExtensions
                 Description = "E-commerce REST API built with .NET 10 and Clean Architecture.",
                 Contact = new OpenApiContact
                 {
-                    Name = "Jason Rizk",
-                    Email = "jason.rizk@example.com" // replace if you have the real address
+                    Name = "Carl Ibrahim",
+                    Email = "carlibrahim774@gmail.com"
                 }
             });
 
