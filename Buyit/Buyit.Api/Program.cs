@@ -1,4 +1,5 @@
 using Buyit.Api.Middleware;
+using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
 
@@ -11,7 +12,8 @@ builder.Services.AddOpenApi();
 
 // swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddBuyitApiVersioning();
+builder.Services.AddBuyitSwagger();
 
 // CORS Policy
 const string DevCors = "DevCors";
