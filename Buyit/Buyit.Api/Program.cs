@@ -2,6 +2,7 @@ using Buyit.Api.Middleware;
 using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +29,11 @@ builder.Services.AddCors(options =>
 // EF Core — register the database context
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Redis Configuration
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+    ConnectionMultiplexer.Connect(redisConnectionString ?? "localhost:6379"));
 
 var app = builder.Build();
 
