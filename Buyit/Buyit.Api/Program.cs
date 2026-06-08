@@ -2,6 +2,13 @@ using Buyit.Api.Middleware;
 using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
+using Buyit.Application.Common;
+using Buyit.Application.Interfaces;
+using Buyit.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using System.IdentityModel.Tokens.Jwt;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +35,39 @@ builder.Services.AddCors(options =>
 // EF Core — register the database context
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+// JWT Settings
+builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
+builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+// Read the Jwt settings once so we can reuse them below
+var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
+// Authentication — teach the app how to validate incoming JWTs
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        // CLAIM NAMING CONVENTION (read before adding controllers that use claims):
+        // MapInboundClaims = false turns OFF the legacy WS-Fed remapping, so JWT claims
+        // keep their SHORT names exactly as issued. The long ClaimTypes.* URIs are NOT
+        // populated, so reading them returns null. In controllers, use short names:
+        //   user id -> User.FindFirst("sub")    (NOT ClaimTypes.NameIdentifier)
+        //   email   -> User.FindFirst("email")  (NOT ClaimTypes.Email)
+        //   role    -> [Authorize(Roles="Admin")] / User.FindFirst("role")
+        // RoleClaimType/NameClaimType below must match the short names the token uses.
+        options.MapInboundClaims = false;   // keep short claim names ("role","sub") as-is
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            RoleClaimType = "role",                          // [Authorize(Roles=...)] reads the "role" claim
+            NameClaimType = JwtRegisteredClaimNames.Sub,     // User.Identity.Name resolves to the user id ("sub")
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+
+            ValidIssuer = jwtSettings.Issuer,
+            ValidAudience = jwtSettings.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtSettings.Secret))
+        };
+    });
 
 var app = builder.Build();
 
@@ -53,6 +93,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
+app.UseAuthentication();//identify who the user is (reads & validates the token)
 app.UseAuthorization();     // placeholder for when auth is added later
 app.MapControllers();       // route requests to your controllers
 app.Run();                  // start listening for requests
