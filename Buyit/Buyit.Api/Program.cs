@@ -8,6 +8,7 @@ using Buyit.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.IdentityModel.Tokens.Jwt;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,8 +44,19 @@ var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // CLAIM NAMING CONVENTION (read before adding controllers that use claims):
+        // MapInboundClaims = false turns OFF the legacy WS-Fed remapping, so JWT claims
+        // keep their SHORT names exactly as issued. The long ClaimTypes.* URIs are NOT
+        // populated, so reading them returns null. In controllers, use short names:
+        //   user id -> User.FindFirst("sub")    (NOT ClaimTypes.NameIdentifier)
+        //   email   -> User.FindFirst("email")  (NOT ClaimTypes.Email)
+        //   role    -> [Authorize(Roles="Admin")] / User.FindFirst("role")
+        // RoleClaimType/NameClaimType below must match the short names the token uses.
+        options.MapInboundClaims = false;   // keep short claim names ("role","sub") as-is
         options.TokenValidationParameters = new TokenValidationParameters
         {
+            RoleClaimType = "role",                          // [Authorize(Roles=...)] reads the "role" claim
+            NameClaimType = JwtRegisteredClaimNames.Sub,     // User.Identity.Name resolves to the user id ("sub")
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
