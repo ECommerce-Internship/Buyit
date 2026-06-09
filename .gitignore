@@ -482,6 +482,6 @@ $RECYCLE.BIN/
 *.swp
 
 
-# Local machine-specific / sensitive config (DB connection string, JWT secret, etc.)
+# Local machine-specific /  sensitive config (DB connection string, JWT secret, etc.)
 # Copy appsettings.Development.example.json to appsettings.Development.json and fill in your own values.
 appsettings.Development.json
