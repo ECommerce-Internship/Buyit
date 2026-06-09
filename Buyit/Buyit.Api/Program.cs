@@ -2,6 +2,7 @@ using Buyit.Api.Middleware;
 using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
+using StackExchange.Redis;
 using Buyit.Application.Common;
 using Buyit.Application.Interfaces;
 using Buyit.Infrastructure.Services;
@@ -68,6 +69,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 Encoding.UTF8.GetBytes(jwtSettings.Secret))
         };
     });
+
+// Redis Configuration
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+    ConnectionMultiplexer.Connect(redisConnectionString ?? "localhost:6379"));
 
 var app = builder.Build();
 
