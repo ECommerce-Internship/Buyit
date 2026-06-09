@@ -38,6 +38,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // JWT Settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+
+// Service Registration 
+builder.Services.AddScoped<ICategoryService, CategoryService>();
+
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
 // Authentication — teach the app how to validate incoming JWTs
