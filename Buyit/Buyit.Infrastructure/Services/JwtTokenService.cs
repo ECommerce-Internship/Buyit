@@ -1,13 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using Buyit.Application.Common;
+﻿using Buyit.Application.Common;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using System.Security.Claims;
+using System;
+using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Buyit.Infrastructure.Services
 {
@@ -46,6 +47,14 @@ namespace Buyit.Infrastructure.Services
             // 5. Serialize the token object into the compact "header.payload.signature" string
             var tokenHandler = new JwtSecurityTokenHandler();
             return tokenHandler.WriteToken(token);
+        }
+
+        public string GenerateRefreshToken()
+        {
+            // 32 random bytes from a cryptographically secure source = an unguessable token
+            var randomBytes = RandomNumberGenerator.GetBytes(32);
+            // Encode the raw bytes as text so it can be stored in a string column / sent as JSON
+            return Convert.ToBase64String(randomBytes);
         }
     }
 }

@@ -1,14 +1,19 @@
-using Buyit.Api.Middleware;
 using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
 using Buyit.Application.Common;
 using Buyit.Application.Interfaces;
+using Buyit.Application.Validators;
 using Buyit.Infrastructure.Services;
+using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using System.IdentityModel.Tokens.Jwt;
+using System.Text;
+using Buyit.Application.DTOs;
+using Buyit.Api.Middleware;
+using StackExchange.Redis;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +43,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // JWT Settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IValidator<RegisterRequest>, RegisterRequestValidator>();
 
 // Service Registration 
 builder.Services.AddScoped<ICategoryService, CategoryService>();
@@ -72,6 +79,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 Encoding.UTF8.GetBytes(jwtSettings.Secret))
         };
     });
+
+// Redis Configuration
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+    ConnectionMultiplexer.Connect(redisConnectionString ?? "localhost:6379"));
 
 var app = builder.Build();
 
