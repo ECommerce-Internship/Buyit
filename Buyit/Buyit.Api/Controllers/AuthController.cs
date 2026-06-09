@@ -37,4 +37,23 @@ public class AuthController : ControllerBase
         var result = await _auth.LoginAsync(request);
         return Ok(result);
     }
+
+    /// <summary>Exchange a valid refresh token for a fresh access + refresh token pair (rotates the old one).</summary>
+    [HttpPost("refresh-token")]
+    [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AuthResponse>> RefreshToken([FromBody] RefreshTokenRequest request)
+    {
+        var result = await _auth.RefreshTokenAsync(request);
+        return Ok(result);
+    }
+
+    /// <summary>Revoke a refresh token so it can no longer be used. Returns 204 No Content.</summary>
+    [HttpPost("logout")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Logout([FromBody] LogoutRequest request)
+    {
+        await _auth.LogoutAsync(request);
+        return NoContent();
+    }
 }
