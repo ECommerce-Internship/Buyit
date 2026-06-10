@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/mnt/c/Program Files/dotnet/dotnet.exe\" tool install --global dotnet-ef)",
+      "Bash(git rm *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Read(//home/carl/**)",
+      "Read(//mnt/c/Users/User/Desktop/**)"
+    ]
+  }
+}
