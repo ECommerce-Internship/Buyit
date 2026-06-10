@@ -24,6 +24,9 @@ public class User
 
     public UserRole Role { get; set; } = UserRole.Customer;
 
+    [MaxLength(30)]
+    public string? PhoneNumber { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     // ---- Navigation properties ----

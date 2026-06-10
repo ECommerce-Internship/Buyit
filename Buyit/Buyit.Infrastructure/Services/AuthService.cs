@@ -20,18 +20,24 @@ public class AuthService : IAuthService
     private readonly AppDbContext _db;
     private readonly IJwtTokenService _tokens;
     private readonly IValidator<RegisterRequest> _registerValidator;
+    private readonly IValidator<UpdateProfileRequest> _updateProfileValidator;
+    private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
     private readonly JwtSettings _jwt;
 
     public AuthService(
-        AppDbContext db,
-        IJwtTokenService tokens,
-        IValidator<RegisterRequest> registerValidator,
-        IOptions<JwtSettings> jwtOptions)
+      AppDbContext db,
+      IJwtTokenService tokens,
+      IValidator<RegisterRequest> registerValidator,
+      IValidator<UpdateProfileRequest> updateProfileValidator,
+      IValidator<ChangePasswordRequest> changePasswordValidator,
+      IOptions<JwtSettings> jwtOptions)
     {
         _db = db;
         _tokens = tokens;
         _registerValidator = registerValidator;
-        _jwt = jwtOptions.Value;   // .Value unwraps the bound JwtSettings
+        _updateProfileValidator = updateProfileValidator;
+        _changePasswordValidator = changePasswordValidator;
+        _jwt = jwtOptions.Value;
     }
 
     public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
@@ -62,6 +68,7 @@ public class AuthService : IAuthService
             Email = request.Email,
             FirstName = request.FirstName,
             LastName = request.LastName,
+            PhoneNumber = request.PhoneNumber,   // optional phone captured at registration
             PasswordHash = passwordHash,
             Role = UserRole.Customer
         };
@@ -127,6 +134,81 @@ public class AuthService : IAuthService
             await _db.SaveChangesAsync();
         }
     }
+    public async Task<UserProfileResponse> GetProfileAsync(int userId)
+    {
+        // Load the user whose id came from the validated JWT "sub" claim.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");   // token valid, but account gone -> 404
+
+        return MapToProfile(user);
+    }
+
+    public async Task<UserProfileResponse> UpdateProfileAsync(int userId, UpdateProfileRequest request)
+    {
+        // 1) Validate input -> 400 via middleware if it fails (same pattern as RegisterAsync).
+        var validation = await _updateProfileValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller's own row.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Copy ONLY the editable fields. (Email and Role are intentionally not touchable here.)
+        user.FirstName = request.FirstName;
+        user.LastName = request.LastName;
+        user.PhoneNumber = request.PhoneNumber;
+
+        // 4) Change tracking already marked 'user' Modified; one UPDATE is sent here.
+        await _db.SaveChangesAsync();
+
+        return MapToProfile(user);
+    }
+
+    public async Task ChangePasswordAsync(int userId, ChangePasswordRequest request)
+    {
+        // 1) Validate input shape -> 400 if bad (non-empty, length, new != current).
+        var validation = await _changePasswordValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller's own row.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Re-verify the CURRENT password against the stored hash -> 401 if wrong (3.8).
+        if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+            throw new UnauthorizedException("Current password is incorrect.");
+
+        // 4) Hash the NEW password (work factor 12, like RegisterAsync) and save.
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12);
+        await _db.SaveChangesAsync();
+    }
+
+    // Map the entity to its safe public projection (no PasswordHash, no navigation graph).
+    private static UserProfileResponse MapToProfile(User user) => new()
+    {
+        Id = user.Id,
+        Email = user.Email,
+        FirstName = user.FirstName,
+        LastName = user.LastName,
+        PhoneNumber = user.PhoneNumber,
+        Role = user.Role.ToString(),
+        CreatedAt = user.CreatedAt
+    };
 
     // Shared helper: mint access + refresh tokens, store the refresh token, build AuthResponse.
     private async Task<AuthResponse> IssueTokensAsync(User user)
@@ -154,6 +236,7 @@ public class AuthService : IAuthService
                 Email = user.Email,
                 FirstName = user.FirstName,
                 LastName = user.LastName,
+                PhoneNumber = user.PhoneNumber,
                 Role = user.Role.ToString()
             }
         };

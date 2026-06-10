@@ -2,6 +2,10 @@
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;   // JwtRegisteredClaimNames.Sub
+using System.Security.Claims;             // User.FindFirstValue(...)
+using Microsoft.AspNetCore.Authorization; // [Authorize]
+using Buyit.Domain.Exceptions;            // UnauthorizedException (for the GetUserId guard)
 
 namespace Buyit.Api.Controllers;
 
@@ -55,5 +59,53 @@ public class AuthController : ControllerBase
     {
         await _auth.LogoutAsync(request);
         return NoContent();
+    }
+    /// <summary>Get the currently-authenticated user's profile.</summary>
+    [Authorize]
+    [HttpGet("me")]
+    [ProducesResponseType(typeof(UserProfileResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<UserProfileResponse>> GetMe()
+    {
+        var userId = GetUserId();
+        var result = await _auth.GetProfileAsync(userId);
+        return Ok(result);
+    }
+
+    /// <summary>Update the currently-authenticated user's first name, last name, and phone number.</summary>
+    [Authorize]
+    [HttpPut("me")]
+    [ProducesResponseType(typeof(UserProfileResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<UserProfileResponse>> UpdateMe([FromBody] UpdateProfileRequest request)
+    {
+        var userId = GetUserId();
+        var result = await _auth.UpdateProfileAsync(userId, request);
+        return Ok(result);
+    }
+
+    /// <summary>Change the currently-authenticated user's password. Returns 204 No Content.</summary>
+    [Authorize]
+    [HttpPost("change-password")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userId = GetUserId();
+        await _auth.ChangePasswordAsync(userId, request);
+        return NoContent();
+    }
+
+    // Reads the signed-in user's id from the JWT "sub" claim. The JWT middleware already
+    // validated the token before this runs, so the claim is trustworthy. We use "sub"
+    // (NOT ClaimTypes.NameIdentifier) because Program.cs sets MapInboundClaims = false.
+    private int GetUserId()
+    {
+        var sub = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (!int.TryParse(sub, out var userId))
+            throw new UnauthorizedException("Token is missing a valid user id.");
+        return userId;
     }
 }
