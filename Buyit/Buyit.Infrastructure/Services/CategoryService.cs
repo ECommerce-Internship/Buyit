@@ -1,8 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using FluentValidation;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
-using Buyit.Domain.Exceptions; 
+using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 
 namespace Buyit.Infrastructure.Services;
@@ -10,10 +11,17 @@ namespace Buyit.Infrastructure.Services;
 public class CategoryService : ICategoryService
 {
     private readonly AppDbContext _context;
+    private readonly IValidator<CreateCategoryRequest> _createValidator;
+    private readonly IValidator<UpdateCategoryRequest> _updateValidator;
 
-    public CategoryService(AppDbContext context)
+    public CategoryService(
+        AppDbContext context,
+        IValidator<CreateCategoryRequest> createValidator,
+        IValidator<UpdateCategoryRequest> updateValidator)
     {
         _context = context;
+        _createValidator = createValidator;
+        _updateValidator = updateValidator;
     }
 
     // 1. GET ALL: Returns all categories with subcategory count
@@ -27,7 +35,7 @@ public class CategoryService : ICategoryService
                 c.Description,
                 c.ParentCategoryId,
                 c.SubCategories.Count,
-                null // We don't need nested trees for GetAll unless asked
+                null 
             ))
             .ToListAsync();
 
@@ -55,15 +63,28 @@ public class CategoryService : ICategoryService
                 sub.Name,
                 sub.Description,
                 sub.ParentCategoryId,
-                0, // Leaf node count default
+                0, 
                 null
             ))
         );
     }
 
-    // 3. POST: Checks unique name, saves, returns DTO
+    // 3. POST: Validates input, checks unique name, saves, returns DTO
     public async Task<CategoryResponse> CreateAsync(CreateCategoryRequest request)
     {
+        var validationResult = await _createValidator.ValidateAsync(request);
+        if (!validationResult.IsValid)
+        {
+            var errorDictionary = validationResult.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(e => e.ErrorMessage).ToArray()
+                );
+
+            throw new Buyit.Domain.Exceptions.ValidationException(errorDictionary);
+        }
+
         var nameExists = await _context.Categories
             .AnyAsync(c => c.Name.ToLower() == request.Name.ToLower());
 
@@ -83,11 +104,23 @@ public class CategoryService : ICategoryService
         return new CategoryResponse(category.Id, category.Name, category.Description, category.ParentCategoryId, 0, null);
     }
 
-    // 4. PUT: Fetches, updates fields, saves
+    // 4. PUT: Validates input, fetches, updates fields, saves
     public async Task UpdateAsync(int id, UpdateCategoryRequest request)
     {
-        var category = await _context.Categories.FindAsync(id);
+        var validationResult = await _updateValidator.ValidateAsync(request);
+        if (!validationResult.IsValid)
+        {
+            var errorDictionary = validationResult.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(e => e.ErrorMessage).ToArray()
+                );
 
+            throw new Buyit.Domain.Exceptions.ValidationException(errorDictionary);
+        }
+
+        var category = await _context.Categories.FindAsync(id);
         if (category == null)
             throw new NotFoundException($"Category with ID {id} was not found.");
 
@@ -112,7 +145,6 @@ public class CategoryService : ICategoryService
         if (category == null)
             throw new NotFoundException($"Category with ID {id} was not found.");
 
-        // Check if any products are linked to this category
         var hasProducts = await _context.Products.AnyAsync(p => p.CategoryId == id);
         if (hasProducts)
             throw new ConflictException("Cannot delete category because it has active products linked to it.");
