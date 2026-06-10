@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/mnt/c/Program Files/dotnet/dotnet.exe\" tool install --global dotnet-ef)"
+    ]
+  }
+}
