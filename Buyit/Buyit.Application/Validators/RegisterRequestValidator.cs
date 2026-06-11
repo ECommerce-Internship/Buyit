@@ -23,5 +23,11 @@ public class RegisterRequestValidator : AbstractValidator<RegisterRequest>
 
         RuleFor(x => x.LastName)
             .NotEmpty().WithMessage("Last name is required.");
+
+        // Phone is OPTIONAL at registration: only validate format/length WHEN one is provided.
+        RuleFor(x => x.PhoneNumber)
+            .MaximumLength(30).WithMessage("Phone number must be at most 30 characters.")
+            .Matches(@"^[0-9+\-\s()]*$").WithMessage("Phone number may contain only digits, spaces, +, -, and ().")
+            .When(x => !string.IsNullOrWhiteSpace(x.PhoneNumber));
     }
 }

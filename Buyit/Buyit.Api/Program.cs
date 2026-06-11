@@ -50,9 +50,12 @@ builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequ
 
 // Service Registration 
 builder.Services.AddScoped<ICategoryService, CategoryService>();
+builder.Services.AddScoped<IValidator<UpdateProfileRequest>, UpdateProfileRequestValidator>();
+builder.Services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
+
 // Authentication — teach the app how to validate incoming JWTs
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
