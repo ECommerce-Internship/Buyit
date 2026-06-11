@@ -193,8 +193,22 @@ public class AuthService : IAuthService
         if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
             throw new UnauthorizedException("Current password is incorrect.");
 
-        // 4) Hash the NEW password (work factor 12, like RegisterAsync) and save.
+        // 4) Hash the NEW password (work factor 12, like RegisterAsync).
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12);
+
+        // 5) Revoke ALL of this user's still-active refresh tokens so every existing
+        //    session is logged out. A password change often means "I may be compromised";
+        //    an attacker holding an old refresh token must not be able to keep minting
+        //    access tokens after the password changes. EF is tracking each loaded token,
+        //    so these revocations and the password update are saved together by the single
+        //    SaveChanges below (one atomic transaction).
+        var activeTokens = await _db.RefreshTokens
+            .Where(rt => rt.UserId == userId && rt.RevokedAt == null)
+            .ToListAsync();
+
+        foreach (var token in activeTokens)
+            token.RevokedAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync();
     }
 
