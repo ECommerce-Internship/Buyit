@@ -14,18 +14,18 @@ public class CategoryService : ICategoryService
     private readonly AppDbContext _context;
     private readonly IValidator<CreateCategoryRequest> _createValidator;
     private readonly IValidator<UpdateCategoryRequest> _updateValidator;
-    private readonly ILogger<CategoryService> _logger; // <-- 1. ADDED logger field
+    private readonly ILogger<CategoryService> _logger; // 1.Logger field
 
     public CategoryService(
         AppDbContext context,
         IValidator<CreateCategoryRequest> createValidator,
         IValidator<UpdateCategoryRequest> updateValidator,
-        ILogger<CategoryService> logger) // <-- 2. ADDED logger to constructor parameters
+        ILogger<CategoryService> logger) // 2.Logger to constructor parameters
     {
         _context = context;
         _createValidator = createValidator;
         _updateValidator = updateValidator;
-        _logger = logger; // <-- 3. Assigned logger
+        _logger = logger; // 3. Assigned logger
     }
 
     // 1. GET ALL: Returns all categories with subcategory count

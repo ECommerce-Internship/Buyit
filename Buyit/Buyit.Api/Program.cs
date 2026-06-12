@@ -125,7 +125,7 @@ if (app.Environment.IsDevelopment())
 // 1. Core Exception Interceptor (Handles errors before lower-level middlewares log them)
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-// 2. PASTE THE NEW UPDATED CODE HERE:
+// 2. Using Serilog for request logging:
 app.UseSerilogRequestLogging(options =>
 {
     // Tell Serilog how to treat different status codes (400-499 should be Warnings, not Errors)
