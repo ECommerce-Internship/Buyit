@@ -5,6 +5,7 @@ using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
+using Microsoft.Extensions.Logging; 
 
 namespace Buyit.Infrastructure.Services;
 
@@ -13,15 +14,18 @@ public class CategoryService : ICategoryService
     private readonly AppDbContext _context;
     private readonly IValidator<CreateCategoryRequest> _createValidator;
     private readonly IValidator<UpdateCategoryRequest> _updateValidator;
+    private readonly ILogger<CategoryService> _logger; // <-- 1. ADDED logger field
 
     public CategoryService(
         AppDbContext context,
         IValidator<CreateCategoryRequest> createValidator,
-        IValidator<UpdateCategoryRequest> updateValidator)
+        IValidator<UpdateCategoryRequest> updateValidator,
+        ILogger<CategoryService> logger) // <-- 2. ADDED logger to constructor parameters
     {
         _context = context;
         _createValidator = createValidator;
         _updateValidator = updateValidator;
+        _logger = logger; // <-- 3. Assigned logger
     }
 
     // 1. GET ALL: Returns all categories with subcategory count
@@ -35,7 +39,7 @@ public class CategoryService : ICategoryService
                 c.Description,
                 c.ParentCategoryId,
                 c.SubCategories.Count,
-                null 
+                null
             ))
             .ToListAsync();
 
@@ -63,7 +67,7 @@ public class CategoryService : ICategoryService
                 sub.Name,
                 sub.Description,
                 sub.ParentCategoryId,
-                0, 
+                0,
                 null
             ))
         );
@@ -72,6 +76,9 @@ public class CategoryService : ICategoryService
     // 3. POST: Validates input, checks unique name, saves, returns DTO
     public async Task<CategoryResponse> CreateAsync(CreateCategoryRequest request)
     {
+        // LOG 1: Track that a creation action was requested by the application layer
+        _logger.LogInformation("Processing category creation request for Name: {CategoryName}", request.Name);
+
         var validationResult = await _createValidator.ValidateAsync(request);
         if (!validationResult.IsValid)
         {
@@ -100,6 +107,9 @@ public class CategoryService : ICategoryService
 
         _context.Categories.Add(category);
         await _context.SaveChangesAsync();
+
+        // LOG 2: Capture a successful database save event along with the fresh structural data
+        _logger.LogInformation("Successfully created category {CategoryName} with assigned Database ID: {CategoryId}", category.Name, category.Id);
 
         return new CategoryResponse(category.Id, category.Name, category.Description, category.ParentCategoryId, 0, null);
     }
@@ -135,6 +145,9 @@ public class CategoryService : ICategoryService
         category.ParentCategoryId = request.ParentCategoryId;
 
         await _context.SaveChangesAsync();
+
+        // LOG 3: Track successful modifications to data resources
+        _logger.LogInformation("Category {CategoryId} details were successfully updated", id);
     }
 
     // 5. DELETE: Checks no products are linked
@@ -151,5 +164,8 @@ public class CategoryService : ICategoryService
 
         _context.Categories.Remove(category);
         await _context.SaveChangesAsync();
+
+        // LOG 4: A clear audit warning tracking structural data removals
+        _logger.LogWarning("Category resource with ID {CategoryId} was permanently deleted from the database", id);
     }
 }
