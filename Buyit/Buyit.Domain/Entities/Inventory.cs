@@ -13,6 +13,9 @@ public class Inventory
     // When stock drops to/below this value, a low-stock alert is raised.
     public int LowStockThreshold { get; set; } = 5;
 
+    // Tracks when stock or threshold was last modified.
+    public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+
     // FK + a unique index (added in Step 3) guarantees the one-to-one link.
     public int ProductId { get; set; }
     public Product Product { get; set; } = null!;
