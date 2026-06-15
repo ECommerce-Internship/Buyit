@@ -9,6 +9,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using Serilog;
 
 namespace Buyit.Infrastructure.Services
 {
@@ -46,6 +47,10 @@ namespace Buyit.Infrastructure.Services
                 signingCredentials: signingCredentials);
             // 5. Serialize the token object into the compact "header.payload.signature" string
             var tokenHandler = new JwtSecurityTokenHandler();
+            Log.Information(
+            "Generated JWT access token for user {UserId} with role {Role}",
+            user.Id,
+            user.Role);
             return tokenHandler.WriteToken(token);
         }
 
