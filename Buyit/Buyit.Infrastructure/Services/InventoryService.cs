@@ -33,7 +33,7 @@ public class InventoryService : IInventoryService
     {
         var inventory = await _context.Inventories
             .Include(i => i.Product)
-            .FirstOrDefaultAsync(i => i.ProductId == productId);
+            .FirstOrDefaultAsync(i => i.ProductId == productId && !i.Product.IsDeleted);
 
         if (inventory == null)
             throw new NotFoundException($"Inventory for product with ID {productId} was not found.");
@@ -46,7 +46,7 @@ public class InventoryService : IInventoryService
     {
         var inventory = await _context.Inventories
             .Include(i => i.Product)
-            .FirstOrDefaultAsync(i => i.ProductId == productId);
+            .FirstOrDefaultAsync(i => i.ProductId == productId && !i.Product.IsDeleted);
 
         if (inventory == null)
             throw new NotFoundException($"Inventory for product with ID {productId} was not found.");
