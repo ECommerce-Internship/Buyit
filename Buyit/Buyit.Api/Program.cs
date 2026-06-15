@@ -52,6 +52,10 @@ builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequ
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IValidator<UpdateProfileRequest>, UpdateProfileRequestValidator>();
 builder.Services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
+// --- TB-32: Product feature registrations ---
+builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
+builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
