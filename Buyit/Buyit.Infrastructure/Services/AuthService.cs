@@ -11,6 +11,7 @@ using Buyit.Infrastructure.Data;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging; 
 using ValidationException = Buyit.Domain.Exceptions.ValidationException;
 
 namespace Buyit.Infrastructure.Services;
@@ -23,6 +24,7 @@ public class AuthService : IAuthService
     private readonly IValidator<UpdateProfileRequest> _updateProfileValidator;
     private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
     private readonly JwtSettings _jwt;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
       AppDbContext db,
@@ -30,7 +32,8 @@ public class AuthService : IAuthService
       IValidator<RegisterRequest> registerValidator,
       IValidator<UpdateProfileRequest> updateProfileValidator,
       IValidator<ChangePasswordRequest> changePasswordValidator,
-      IOptions<JwtSettings> jwtOptions)
+      IOptions<JwtSettings> jwtOptions,
+      ILogger<AuthService> logger) 
     {
         _db = db;
         _tokens = tokens;
@@ -38,6 +41,7 @@ public class AuthService : IAuthService
         _updateProfileValidator = updateProfileValidator;
         _changePasswordValidator = changePasswordValidator;
         _jwt = jwtOptions.Value;
+        _logger = logger; 
     }
 
     public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
@@ -68,7 +72,7 @@ public class AuthService : IAuthService
             Email = request.Email,
             FirstName = request.FirstName,
             LastName = request.LastName,
-            PhoneNumber = request.PhoneNumber,   // optional phone captured at registration
+            PhoneNumber = request.PhoneNumber,
             PasswordHash = passwordHash,
             Role = UserRole.Customer
         };
@@ -87,7 +91,12 @@ public class AuthService : IAuthService
         // 2) Same generic error for "no such user" AND "wrong password"
         //    (prevents attackers from discovering which emails exist)
         if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        {
+            // LOG 5 (The Final Meaningful Log): Security Audit tracking authentication failures
+            _logger.LogWarning("Failed login attempt detected for Identity Email: {UserEmail}", request.Email);
+
             throw new UnauthorizedException("Invalid email or password.");
+        }
 
         // 3) Issue tokens and return
         return await IssueTokensAsync(user);

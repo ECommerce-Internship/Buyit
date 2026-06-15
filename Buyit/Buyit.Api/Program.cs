@@ -1,3 +1,4 @@
+using Serilog;
 using Buyit.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Buyit.Infrastructure.Data;
@@ -14,8 +15,28 @@ using Buyit.Application.DTOs;
 using Buyit.Api.Middleware;
 using StackExchange.Redis;
 
+// Bootstrap logger — captures startup errors before the host config is loaded
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Replace default .NET logging with Serilog (Console + SEQ sinks)
+builder.Host.UseSerilog((context, services, config) =>
+{
+    config
+        .MinimumLevel.Information()
+        .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
+        .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.Seq(context.Configuration["Seq:ServerUrl"] ?? "http://localhost:5341");
+});
 
 // Register Services
 builder.Services.AddControllers();              // enables controller-based endpoints
@@ -52,6 +73,10 @@ builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequ
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IValidator<UpdateProfileRequest>, UpdateProfileRequestValidator>();
 builder.Services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
+// --- TB-32: Product feature registrations ---
+builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
+builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 
@@ -104,10 +129,43 @@ if (app.Environment.IsDevelopment())
     DbInitializer.Seed(db);     // insert seed data (runs once)
 }
 
-
+// 1. Core Exception Interceptor (Handles errors before lower-level middlewares log them)
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-// HTTP pipeline 
+// 2. Using Serilog for request logging:
+app.UseSerilogRequestLogging(options =>
+{
+    // Tell Serilog how to treat different status codes (400-499 should be Warnings, not Errors)
+    options.GetLevel = (httpContext, elapsedMs, authException) => 
+    {
+        if (httpContext.Response.StatusCode >= 500 || authException != null)
+        {
+            if (authException is Buyit.Domain.Exceptions.UnauthorizedException || 
+                authException is Buyit.Domain.Exceptions.ValidationException ||
+                authException is Buyit.Domain.Exceptions.NotFoundException ||
+                authException is Buyit.Domain.Exceptions.ConflictException)
+            {
+                return Serilog.Events.LogEventLevel.Warning; 
+            }
+            return Serilog.Events.LogEventLevel.Error;
+        }
+        return Serilog.Events.LogEventLevel.Information;
+    };
+
+    options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        var userId = httpContext.User?.FindFirst("sub")?.Value;
+        if (!string.IsNullOrEmpty(userId))
+            diagnosticContext.Set("UserId", userId);
+
+        diagnosticContext.Set("ClientIp", httpContext.Connection.RemoteIpAddress?.ToString());
+    };
+});
+
+
+// HTTP pipeline environment configurations
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();       // serves the built-in OpenAPI JSON at /openapi/v1.json
@@ -117,9 +175,24 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
-app.UseAuthentication();//identify who the user is (reads & validates the token)
-app.UseAuthorization();     // placeholder for when auth is added later
+
+// 3. Routing & Endpoint Protections (Must remain in this structural order)
+app.UseRouting();
+app.UseAuthentication();    // identify who the user is (reads & validates the token)
+app.UseAuthorization();     // authorization checks based on claims/roles
+
 app.MapControllers();       // route requests to your controllers
-app.Run();                  // start listening for requests
 
-
+// Wrap app.Run() to catch fatal startup exceptions and flush all logs before exit
+try
+{
+    app.Run();              // start listening for requests
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();    // ensures all buffered logs are sent to Seq before exit
+}
