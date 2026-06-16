@@ -2,6 +2,8 @@
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;  
+using Microsoft.AspNetCore.Http;           
 
 namespace Buyit.Api.Controllers;
 
@@ -68,5 +70,37 @@ public class ProductController : ControllerBase
     {
         await _products.DeleteAsync(id);
         return NoContent();
+    }
+
+    /// <summary>Bulk-import products from an .xlsx file. Admin only.</summary>
+    [HttpPost("import")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(ImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ImportResultDto>> Import(IFormFile file)
+    {
+        // 1) There must actually be a file with content.
+        if (file is null || file.Length == 0)
+            return BadRequest("No file was uploaded.");
+
+        // 2) Only modern Excel files (.xlsx) are accepted. Compare lower-cased to ignore case.
+        //    "?? string.Empty" guards the rare case where the upload has no file name at all.
+        var extension = Path.GetExtension(file.FileName ?? string.Empty).ToLowerInvariant();
+        if (extension != ".xlsx")
+            return BadRequest("Only .xlsx files are allowed.");
+
+        // 3) Size limit: 10 MB. 10 * 1024 * 1024 bytes = 10 megabytes.
+        const long maxBytes = 10L * 1024 * 1024;
+        if (file.Length > maxBytes)
+            return BadRequest("File must be 10 MB or smaller.");
+
+        // 4) Copy the upload into a rewindable MemoryStream so EPPlus can read it cleanly.
+        using var memory = new MemoryStream();
+        await file.CopyToAsync(memory);
+        memory.Position = 0;   // rewind to the start before reading
+
+        // 5) Hand the stream to the service and return its summary.
+        var result = await _products.ImportAsync(memory);
+        return Ok(result);
     }
 }

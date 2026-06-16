@@ -22,4 +22,8 @@ public interface IProductService
 
     // Soft delete — sets IsDeleted = true. Throws NotFoundException if missing.
     Task DeleteAsync(int id);
+
+    // Bulk import — reads products from an .xlsx stream, inserts the valid ones,
+    // and returns a summary (added count, failed count, per-row errors).
+    Task<ImportResultDto> ImportAsync(Stream fileStream);
 }
