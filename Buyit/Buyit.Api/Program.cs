@@ -14,6 +14,7 @@ using System.Text;
 using Buyit.Application.DTOs;
 using Buyit.Api.Middleware;
 using StackExchange.Redis;
+using OfficeOpenXml;
 
 // Bootstrap logger — captures startup errors before the host config is loaded
 Log.Logger = new LoggerConfiguration()
@@ -25,6 +26,7 @@ Log.Logger = new LoggerConfiguration()
     .CreateBootstrapLogger();
 
 var builder = WebApplication.CreateBuilder(args);
+ExcelPackage.License.SetNonCommercialPersonal("Carl Ibrahim");
 
 // Replace default .NET logging with Serilog (Console + SEQ sinks)
 builder.Host.UseSerilog((context, services, config) =>
@@ -73,10 +75,6 @@ builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequ
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IValidator<UpdateProfileRequest>, UpdateProfileRequestValidator>();
 builder.Services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
-// --- TB-32: Product feature registrations ---
-builder.Services.AddScoped<IProductService, ProductService>();
-builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
-builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
