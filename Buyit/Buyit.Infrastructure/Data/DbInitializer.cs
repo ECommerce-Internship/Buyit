@@ -80,7 +80,17 @@ namespace Buyit.Infrastructure.Data
               };
             context.Products.AddRange(products);
 
-            // (5) Write everything to the database in one transaction.
+            // (5) One test coupon for Swagger testing
+            var coupon = new Coupon
+            {
+                Code = "SAVE10",
+                DiscountPercentage = 10,
+                ExpiryDate = DateTime.UtcNow.AddYears(1),
+                IsActive = true
+            };
+            context.Coupons.Add(coupon);
+
+            // (6) Write everything to the database in one transaction.
             context.SaveChanges();
         }
     }
