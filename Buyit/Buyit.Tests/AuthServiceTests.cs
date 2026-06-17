@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;                       // .Should() readable assertions
 using Microsoft.EntityFrameworkCore;          // DbContextOptionsBuilder, UseInMemoryDatabase
 using Microsoft.Extensions.Options;           // Options.Create(...)
+using Microsoft.Extensions.Logging;           // ILogger<T>
 using Moq;                                    // Mock<T>, It.IsAny, Returns
 using Xunit;                                  // [Fact]
 
@@ -42,13 +43,16 @@ public class AuthServiceTests
         // Minimal settings; only ExpiryMinutes is read by AuthService.
         var jwtOptions = Options.Create(new JwtSettings { ExpiryMinutes = 15 });
 
+        var loggerMock = new Mock<ILogger<AuthService>>();
+
         return new AuthService(
             db,
             jwtMock.Object,
             registerValidator,
             updateValidator,
             changeValidator,
-            jwtOptions);
+            jwtOptions,
+            loggerMock.Object);
     }
 
     // Convenience: build a valid registration request that PASSES the real validator.
