@@ -19,8 +19,10 @@ public class User
     public string Email { get; set; } = string.Empty;
 
     // We NEVER store the raw password — only a BCrypt hash of it.
-    [Required, MaxLength(255)]
-    public string PasswordHash { get; set; } = string.Empty;
+    // Nullable: users who sign in only via an external provider (e.g. Google)
+    // have no password in our system. See UserExternalLogin.
+    [MaxLength(255)]
+    public string? PasswordHash { get; set; }
 
     public UserRole Role { get; set; } = UserRole.Customer;
 
@@ -34,4 +36,5 @@ public class User
     public ICollection<Order> Orders { get; set; } = new List<Order>();
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
+    public ICollection<UserExternalLogin> ExternalLogins { get; set; } = new List<UserExternalLogin>();
 }

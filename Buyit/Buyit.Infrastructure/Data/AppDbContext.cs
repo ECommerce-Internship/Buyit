@@ -12,6 +12,7 @@ namespace Buyit.Infrastructure.Data
         // ---------- DbSets: one table per entity ----------
         public DbSet<User> Users => Set<User>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+        public DbSet<UserExternalLogin> UserExternalLogins => Set<UserExternalLogin>();
         public DbSet<Category> Categories => Set<Category>();
         public DbSet<Product> Products => Set<Product>();
         public DbSet<Inventory> Inventories => Set<Inventory>();
@@ -34,6 +35,12 @@ namespace Buyit.Infrastructure.Data
                 .HasOne(rt => rt.User)
                 .WithMany(u => u.RefreshTokens)
                 .HasForeignKey(rt => rt.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // User (1) -> ExternalLogins (N) : delete user -> delete their links
+            modelBuilder.Entity<UserExternalLogin>()
+                .HasOne(el => el.User)
+                .WithMany(u => u.ExternalLogins)
+                .HasForeignKey(el => el.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             // User (1) -> Orders (N) : keep order history if user removed
@@ -99,6 +106,7 @@ namespace Buyit.Infrastructure.Data
                 .HasForeignKey(c => c.CouponId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+
             // ========== SELF-REFERENCING ==========
 
             // Category -> ParentCategory (must be Restrict; SQL Server forbids self-cascade)
@@ -140,6 +148,12 @@ namespace Buyit.Infrastructure.Data
             // A unique index turns that O(n) table scan into a B-tree seek and
             // guarantees no two sessions ever share a token value.
             modelBuilder.Entity<RefreshToken>().HasIndex(rt => rt.Token).IsUnique();
+            // A given external account (Provider + ProviderUserId) may be linked
+            // to at most ONE of our users. Enforced at the database level so two
+            // users can never claim the same Google account.
+            modelBuilder.Entity<UserExternalLogin>()
+                .HasIndex(el => new { el.Provider, el.ProviderUserId })
+                .IsUnique();
 
             // ========== DECIMAL PRECISION ==========
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
