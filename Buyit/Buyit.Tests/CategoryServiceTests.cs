@@ -2,6 +2,7 @@
 using Moq;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using FluentValidation;
 using FluentValidation.Results;
 using Buyit.Application.DTOs;
@@ -36,7 +37,9 @@ public class CategoryServiceTests
         updateValidatorMock.Setup(v => v.ValidateAsync(It.IsAny<UpdateCategoryRequest>(), default))
             .ReturnsAsync(new ValidationResult());
 
-        return new CategoryService(db, createValidatorMock.Object, updateValidatorMock.Object);
+        var loggerMock = new Mock<ILogger<CategoryService>>();
+
+        return new CategoryService(db, createValidatorMock.Object, updateValidatorMock.Object, loggerMock.Object);
     }
 
     [Fact]
