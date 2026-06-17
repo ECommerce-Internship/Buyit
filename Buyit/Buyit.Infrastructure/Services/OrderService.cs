@@ -1,10 +1,11 @@
-using Microsoft.EntityFrameworkCore;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
+using FluentValidation;
+using Microsoft.EntityFrameworkCore;
 
 namespace Buyit.Infrastructure.Services;
 
@@ -12,15 +13,30 @@ public class OrderService : IOrderService
 {
     private readonly AppDbContext _context;
     private readonly IEmailService _emailService;
+    private readonly IValidator<PlaceOrderRequest> _placeOrderValidator;
 
-    public OrderService(AppDbContext context, IEmailService emailService)
+    public OrderService(AppDbContext context, IEmailService emailService, IValidator<PlaceOrderRequest> placeOrderValidator)
     {
         _context = context;
         _emailService = emailService;
+        _placeOrderValidator = placeOrderValidator;
     }
 
     public async Task<OrderResponse> PlaceOrderAsync(int userId, PlaceOrderRequest request)
     {
+        // Validate shipping address fields before any DB work
+        var validationResult = await _placeOrderValidator.ValidateAsync(request);
+        if (!validationResult.IsValid)
+        {
+            var errorDictionary = validationResult.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(e => e.ErrorMessage).ToArray()
+                );
+            throw new Buyit.Domain.Exceptions.ValidationException(errorDictionary);
+        }
+
         // (1) Fetch cart with items for this user
         var cart = await _context.Carts
             .Include(c => c.CartItems)
@@ -55,9 +71,17 @@ public class OrderService : IOrderService
 
         try
         {
-            // (4) Compute final total with coupon discount applied
+            // (4) Compute final total re-validating coupon at order time in case it expired or was deactivated 
             var subtotal = cart.CartItems.Sum(ci => ci.Product.Price * ci.Quantity);
-            var discountPercentage = cart.Coupon?.DiscountPercentage ?? 0;
+
+            var coupon = cart.Coupon;
+            if (coupon != null && (!coupon.IsActive || coupon.ExpiryDate < DateTime.UtcNow))
+            {
+                cart.CouponId = null;
+                coupon = null;
+            }
+
+            var discountPercentage = coupon?.DiscountPercentage ?? 0;
             var discountAmount = Math.Round(subtotal * (discountPercentage / 100), 2);
             var finalTotal = subtotal - discountAmount;
 
