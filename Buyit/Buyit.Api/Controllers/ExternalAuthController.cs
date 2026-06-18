@@ -129,6 +129,7 @@ public class ExternalAuthController : ControllerBase
         {
             Subject = payload.Subject,
             Email = payload.Email,
+            EmailVerified = payload.EmailVerified,
             Name = payload.Name ?? string.Empty,
             Picture = payload.Picture
         };

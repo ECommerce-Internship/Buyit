@@ -59,7 +59,22 @@ public class ExternalAuthService : IExternalAuthService
             return await IssueTokensAsync(existingLogin.User);
 
 
-        // 2) First Google login — is the email already a password account?
+        // 2) GUARD: from here on we trust the email (collision check + account creation),
+        //    so it MUST be present AND verified by Google. An unverified email could let a
+        //    user bind a Buyit account to an address they don't own. Returning users (step 1)
+        //    are identified by 'sub', so they bypass this. -> 400 via the exception middleware.
+        if (string.IsNullOrWhiteSpace(claims.Email) || !claims.EmailVerified)
+        {
+            throw new ValidationException(new Dictionary<string, string[]>
+            {
+                ["Email"] = new[]
+                {
+                    "Google did not return a verified email address, so the account cannot be created."
+                }
+            });
+        }
+
+        // 3) First Google login — is the email already a password account?
         //    Normalize through the same helper AuthService uses so casing/whitespace
         //    can't cause us to miss an existing account or create a near-duplicate.
         var email = EmailNormalizer.Normalize(claims.Email);
@@ -68,13 +83,13 @@ public class ExternalAuthService : IExternalAuthService
 
         if (userWithSameEmail is not null)
         {
-            // 3) Email collision -> block with a clear 409 (no silent merge).
+            // 4) Email collision -> block with a clear 409 (no silent merge).
             throw new ConflictException(
                 "An account with this email already exists. " +
                 "Please sign in with your email and password instead.");
         }
 
-        // 4) Brand-new user: create User (no password) + link row.
+        // 5) Brand-new user: create User (no password) + link row.
         var (firstName, lastName) = SplitName(claims.Name);
 
         var newUser = new User

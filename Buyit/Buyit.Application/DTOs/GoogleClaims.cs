@@ -17,6 +17,14 @@ public class GoogleClaims
     /// <summary>The user's Google email address.</summary>
     public string Email { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Whether Google has verified the user actually owns this email address
+    /// (the "email_verified" claim). MUST be true before we trust Email as an
+    /// identity — otherwise a user could bind a Buyit account to an address
+    /// they don't control.
+    /// </summary>
+    public bool EmailVerified { get; set; }
+
     /// <summary>The user's full display name, e.g. "Carl Ibrahim".</summary>
     public string Name { get; set; } = string.Empty;
 
