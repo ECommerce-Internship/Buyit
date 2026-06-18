@@ -1,6 +1,7 @@
 ﻿using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
+using Buyit.Domain.Common;
 using Buyit.Domain.Constants;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
@@ -59,8 +60,11 @@ public class ExternalAuthService : IExternalAuthService
 
 
         // 2) First Google login — is the email already a password account?
+        //    Normalize through the same helper AuthService uses so casing/whitespace
+        //    can't cause us to miss an existing account or create a near-duplicate.
+        var email = EmailNormalizer.Normalize(claims.Email);
         var userWithSameEmail = await _db.Users
-            .FirstOrDefaultAsync(u => u.Email == claims.Email);
+            .FirstOrDefaultAsync(u => u.Email == email);
 
         if (userWithSameEmail is not null)
         {
@@ -75,7 +79,7 @@ public class ExternalAuthService : IExternalAuthService
 
         var newUser = new User
         {
-            Email = claims.Email,
+            Email = email,
             FirstName = firstName,
             LastName = lastName,
             Role = UserRole.Customer,
