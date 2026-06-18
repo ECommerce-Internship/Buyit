@@ -14,12 +14,18 @@ public class OrderService : IOrderService
     private readonly AppDbContext _context;
     private readonly IEmailService _emailService;
     private readonly IValidator<PlaceOrderRequest> _placeOrderValidator;
+    private readonly ICacheService _cache;
 
-    public OrderService(AppDbContext context, IEmailService emailService, IValidator<PlaceOrderRequest> placeOrderValidator)
+    public OrderService(
+        AppDbContext context,
+        IEmailService emailService,
+        IValidator<PlaceOrderRequest> placeOrderValidator,
+        ICacheService cache)
     {
         _context = context;
         _emailService = emailService;
         _placeOrderValidator = placeOrderValidator;
+        _cache = cache;
     }
 
     public async Task<OrderResponse> PlaceOrderAsync(int userId, PlaceOrderRequest request)
@@ -122,12 +128,23 @@ public class OrderService : IOrderService
                 item.Product.Inventory.LastUpdated = DateTime.UtcNow;
             }
 
+            // Capture affected product ids BEFORE clearing the cart — after RemoveRange +
+            // SaveChanges, EF may detach these items from cart.CartItems, so read them now.
+            var affectedProductIds = cart.CartItems.Select(ci => ci.ProductId).Distinct().ToList();
+
             // (8) Clear cart items and remove coupon
             _context.CartItems.RemoveRange(cart.CartItems);
             cart.CouponId = null;
 
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
+
+            // (8b) Stock just dropped for every ordered product, and stock is embedded in the
+            //      cached ProductResponse. Invalidate each affected product AFTER the commit so
+            //      GET /products(/{id}) can't keep showing "in stock" for something just sold out.
+            //      (Cache calls are fail-open, so a Redis outage won't affect the placed order.)
+            foreach (var productId in affectedProductIds)
+                await _cache.InvalidateProductAsync(productId);
 
             // (9) Fire and forget — queue confirmation email without blocking the response
             var userEmail = (await _context.Users.FindAsync(userId))?.Email ?? string.Empty;

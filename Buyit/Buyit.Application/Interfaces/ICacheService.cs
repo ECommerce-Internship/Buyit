@@ -18,4 +18,9 @@ public interface ICacheService
 
     // DELETE MANY: remove all keys matching a pattern.
     Task RemoveByPatternAsync(string pattern);
+
+    // INVALIDATE ONE PRODUCT: drop the single product:{id} entry AND every products:* list
+    // page. Centralized here so every write path that changes a product's cached shape
+    // (stock, rating, fields) uses the EXACT same key scheme and can't drift.
+    Task InvalidateProductAsync(int productId);
 }

@@ -217,9 +217,8 @@ public class ProductService : IProductService
         _db.Products.Add(product);
         await _db.SaveChangesAsync();   // inserts Product + Inventory atomically; sets product.Id.
 
-        // --- INVALIDATE: a new product can appear in list results, so drop all list caches.
-        await _cache.RemoveByPatternAsync("products:*");
-        await _cache.RemoveAsync($"product:{product.Id}");
+        // --- INVALIDATE: a new product can appear in list results, so drop its caches.
+        await _cache.InvalidateProductAsync(product.Id);
 
         // 4) Return the freshly created product in DTO form (re-fetch to include CategoryName).
         return await GetByIdAsync(product.Id);
@@ -257,8 +256,7 @@ public class ProductService : IProductService
         await _db.SaveChangesAsync();
 
         // --- INVALIDATE: the product changed, so drop its single cache AND all list caches.
-        await _cache.RemoveByPatternAsync("products:*");
-        await _cache.RemoveAsync($"product:{id}");
+        await _cache.InvalidateProductAsync(id);
 
         // 6) Return the updated product in DTO form.
         return await GetByIdAsync(product.Id);
@@ -277,8 +275,7 @@ public class ProductService : IProductService
         await _db.SaveChangesAsync();
 
         // --- INVALIDATE: a deleted product must vanish from caches too.
-        await _cache.RemoveByPatternAsync("products:*");
-        await _cache.RemoveAsync($"product:{id}");
+        await _cache.InvalidateProductAsync(id);
     }
 
     // ----- Limits that mirror the DATABASE so a bad row is reported, never crashes SaveChanges. -----
