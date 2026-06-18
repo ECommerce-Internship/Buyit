@@ -5,9 +5,12 @@ using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
-using ValidationException = Buyit.Domain.Exceptions.ValidationException;
+using Microsoft.Extensions.Logging;   
 using OfficeOpenXml;
-using System.Globalization;  // CultureInfo / NumberStyles for safe, locale-tolerant parsing
+using System.Globalization;
+using System.Security.Cryptography;   
+using System.Text;                  
+using ValidationException = Buyit.Domain.Exceptions.ValidationException;
 
 namespace Buyit.Infrastructure.Services;
 
@@ -17,19 +20,32 @@ public class ProductService : IProductService
     private readonly AppDbContext _db;
     private readonly IValidator<CreateProductRequest> _createValidator;
     private readonly IValidator<UpdateProductRequest> _updateValidator;
+    private readonly ICacheService _cache;
+    private readonly ILogger<ProductService> _logger;
 
     public ProductService(
-        AppDbContext db,
-        IValidator<CreateProductRequest> createValidator,
-        IValidator<UpdateProductRequest> updateValidator)
+     AppDbContext db,
+     IValidator<CreateProductRequest> createValidator,
+     IValidator<UpdateProductRequest> updateValidator,
+     ICacheService cache,                 
+     ILogger<ProductService> logger)      
     {
         _db = db;
         _createValidator = createValidator;
         _updateValidator = updateValidator;
+        _cache = cache;                      
+        _logger = logger;                    
     }
 
     public async Task<PaginatedResult<ProductResponse>> GetAllAsync(ProductQueryParameters query)
     {
+        // --- CACHE-ASIDE (read): try the cache before touching the database. ---
+        string cacheKey = BuildListCacheKey(query);
+        var cached = await _cache.GetAsync<PaginatedResult<ProductResponse>>(cacheKey);
+        if (cached is not null)
+            return cached;   // HIT: return the saved page; DB is never queried.
+
+        _logger.LogInformation("Querying DATABASE for products list (key {CacheKey})", cacheKey);
         // STAGE 1 — start the query. Nothing runs yet; this is an IQueryable (a plan).
         // The global query filter in AppDbContext already excludes IsDeleted == true.
         IQueryable<Product> products = _db.Products;
@@ -99,8 +115,8 @@ public class ProductService : IProductService
         // the division keeps its remainder (e.g. 25/10 = 2.5 -> Ceiling -> 3), then back to int.
         var totalPages = (int)Math.Ceiling(totalCount / (double)query.PageSize);
 
-        // Assemble and return the page + metadata.
-        return new PaginatedResult<ProductResponse>
+        // Assemble the page + metadata.
+        var result = new PaginatedResult<ProductResponse>
         {
             Items = items,
             Page = query.Page,
@@ -108,10 +124,23 @@ public class ProductService : IProductService
             TotalCount = totalCount,
             TotalPages = totalPages
         };
+
+        // --- CACHE-ASIDE (write): save the freshly-built page for 5 minutes. ---
+        await _cache.SetAsync(cacheKey, result, TimeSpan.FromMinutes(5));
+
+        return result;
     }
 
     public async Task<ProductResponse> GetByIdAsync(int id)
     {
+        // --- CACHE-ASIDE (read): individual product cached under "product:{id}". ---
+        string cacheKey = $"product:{id}";
+        var cached = await _cache.GetAsync<ProductResponse>(cacheKey);
+        if (cached is not null)
+            return cached;   // HIT
+
+        _logger.LogInformation("Querying DATABASE for product {ProductId}", id);
+
         // Project straight into the DTO; the global filter still hides soft-deleted rows.
         var product = await _db.Products
             .Where(p => p.Id == id)
@@ -134,6 +163,8 @@ public class ProductService : IProductService
         // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
+        // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
+        await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
 
         return product;
     }
@@ -186,6 +217,10 @@ public class ProductService : IProductService
         _db.Products.Add(product);
         await _db.SaveChangesAsync();   // inserts Product + Inventory atomically; sets product.Id.
 
+        // --- INVALIDATE: a new product can appear in list results, so drop all list caches.
+        await _cache.RemoveByPatternAsync("products:*");
+        await _cache.RemoveAsync($"product:{product.Id}");
+
         // 4) Return the freshly created product in DTO form (re-fetch to include CategoryName).
         return await GetByIdAsync(product.Id);
     }
@@ -221,6 +256,10 @@ public class ProductService : IProductService
         // 5) One UPDATE statement is sent here.
         await _db.SaveChangesAsync();
 
+        // --- INVALIDATE: the product changed, so drop its single cache AND all list caches.
+        await _cache.RemoveByPatternAsync("products:*");
+        await _cache.RemoveAsync($"product:{id}");
+
         // 6) Return the updated product in DTO form.
         return await GetByIdAsync(product.Id);
     }
@@ -236,6 +275,10 @@ public class ProductService : IProductService
 
         // EF sends a single UPDATE setting IsDeleted = 1.
         await _db.SaveChangesAsync();
+
+        // --- INVALIDATE: a deleted product must vanish from caches too.
+        await _cache.RemoveByPatternAsync("products:*");
+        await _cache.RemoveAsync($"product:{id}");
     }
 
     // ----- Limits that mirror the DATABASE so a bad row is reported, never crashes SaveChanges. -----
@@ -451,6 +494,25 @@ public class ProductService : IProductService
             result.FailedCount = result.Errors.Count;
             return result;
         }
+    }
+    // Builds a STABLE, UNIQUE cache key for one specific combination of query parameters.
+    // Same parameters -> same key (so the 2nd identical request HITS). Different parameters
+    // -> different key (so page 2 never returns page 1's data).
+    // The "products:" prefix lets RemoveByPatternAsync("products:*") wipe ALL list caches at once.
+    private static string BuildListCacheKey(ProductQueryParameters q)
+    {
+        // 1) Glue every parameter into one string. The '|' separators keep fields apart so
+        //    (Search="a", City="b") can never collide with (Search="ab", City="").
+        string raw =
+            $"{q.Search}|{q.CategoryId}|{q.MinPrice}|{q.MaxPrice}|" +
+            $"{q.SortBy}|{q.SortDescending}|{q.Page}|{q.PageSize}";
+
+        // 2) Hash that string into a short, fixed-length, safe fingerprint (SHA-256).
+        byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        string hash = Convert.ToHexString(bytes); // bytes -> readable hex text
+
+        // 3) Final key, e.g. "products:9F3A2B7C...".
+        return $"products:{hash}";
     }
 
 

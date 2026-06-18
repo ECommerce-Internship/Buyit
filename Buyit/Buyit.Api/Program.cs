@@ -1,20 +1,20 @@
-using Serilog;
 using Buyit.Api.Extensions;
-using Microsoft.EntityFrameworkCore;
-using Buyit.Infrastructure.Data;
+using Buyit.Api.Middleware;
 using Buyit.Application.Common;
+using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
+using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using OfficeOpenXml;
+using Serilog;
+using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
-using Buyit.Application.DTOs;
-using Buyit.Api.Middleware;
-using StackExchange.Redis;
-using OfficeOpenXml;
 
 // Bootstrap logger — captures startup errors before the host config is loaded
 Log.Logger = new LoggerConfiguration()
@@ -85,7 +85,7 @@ builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductReques
 builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
-
+builder.Services.AddScoped<ICacheService, CacheService>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;

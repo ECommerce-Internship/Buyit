@@ -6,10 +6,12 @@ using FluentValidation;
 using FluentValidation.Results;
 using OfficeOpenXml;
 using Buyit.Application.DTOs;
+using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Buyit.Tests;
 
@@ -45,7 +47,17 @@ public class ProductServiceTests
             .Setup(v => v.ValidateAsync(It.IsAny<UpdateProductRequest>(), default))
             .ReturnsAsync(new ValidationResult());
 
-        return new ProductService(db, createValidatorMock.Object, updateValidatorMock.Object);
+        // Cache is mocked: GetAsync returns null by default (a cache MISS), so every test still
+        // exercises the real database path. The write/remove calls become harmless no-ops.
+        var cacheMock = new Mock<ICacheService>();
+        var loggerMock = new Mock<ILogger<ProductService>>();
+
+        return new ProductService(
+            db,
+            createValidatorMock.Object,
+            updateValidatorMock.Object,
+            cacheMock.Object,
+            loggerMock.Object);
     }
 
     // Builds a real .xlsx in memory in the importer's column order:
