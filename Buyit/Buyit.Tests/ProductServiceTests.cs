@@ -50,6 +50,9 @@ public class ProductServiceTests
         // Cache is mocked: GetAsync returns null by default (a cache MISS), so every test still
         // exercises the real database path. The write/remove calls become harmless no-ops.
         var cacheMock = new Mock<ICacheService>();
+        // Blob storage is mocked: these tests exercise DB/cache logic, not Azure. Its
+        // methods become harmless no-ops (UploadAsync returns null, DeleteAsync does nothing).
+        var blobMock = new Mock<IBlobStorageService>();
         var loggerMock = new Mock<ILogger<ProductService>>();
 
         return new ProductService(
@@ -57,6 +60,7 @@ public class ProductServiceTests
             createValidatorMock.Object,
             updateValidatorMock.Object,
             cacheMock.Object,
+            blobMock.Object,
             loggerMock.Object);
     }
 

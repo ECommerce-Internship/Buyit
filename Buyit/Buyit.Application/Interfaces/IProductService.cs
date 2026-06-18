@@ -1,4 +1,6 @@
 ﻿using Buyit.Application.DTOs;
+using Microsoft.AspNetCore.Http;
+
 
 namespace Buyit.Application.Interfaces;
 
@@ -26,4 +28,10 @@ public interface IProductService
     // Bulk import — reads products from an .xlsx stream, inserts the valid ones,
     // and returns a summary (added count, failed count, per-row errors).
     Task<ImportResultDto> ImportAsync(Stream fileStream);
+
+    // TB-42: set/replace this product's image. Returns the new public image URL.
+    Task<string> SetProductImageAsync(int id, IFormFile file);
+
+    // TB-42: remove this product's image (deletes the blob and clears ImageUrl).
+    Task RemoveProductImageAsync(int id);
 }
