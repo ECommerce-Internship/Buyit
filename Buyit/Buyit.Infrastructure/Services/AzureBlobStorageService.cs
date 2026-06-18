@@ -30,6 +30,16 @@ public class AzureBlobStorageService : IBlobStorageService
         //    hit the network yet — it just builds a client object pointing at it.
         BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
 
+        // 1b) Make sure the container actually exists AND allows anonymous blob reads,
+        //     because we hand the raw blob.Uri back as the product ImageUrl (step 5) and
+        //     a browser must be able to GET it. Without this the upload would throw when
+        //     the container is missing, or the stored URL would 404/403 for shoppers.
+        //     CreateIfNotExistsAsync is idempotent (no-op once the container exists).
+        //     NOTE: this requires the storage account to have "Allow Blob public access"
+        //     ENABLED. If your account keeps public access disabled, switch to issuing
+        //     short-lived SAS URLs on read instead of storing a permanent public URL.
+        await container.CreateIfNotExistsAsync(PublicAccessType.Blob);
+
         // 2) Build the unique blob name: "{productId}/{Guid}{extension}".
         //    - Path.GetExtension keeps the leading dot, e.g. ".jpg".
         //    - ToLowerInvariant normalises ".JPG" -> ".jpg".
