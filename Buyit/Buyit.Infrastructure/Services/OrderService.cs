@@ -74,11 +74,15 @@ public class OrderService : IOrderService
             // (4) Compute final total re-validating coupon at order time in case it expired or was deactivated 
             var subtotal = cart.CartItems.Sum(ci => ci.Product.Price * ci.Quantity);
 
+            
             var coupon = cart.Coupon;
             if (coupon != null && (!coupon.IsActive || coupon.ExpiryDate < DateTime.UtcNow))
-            {
-                cart.CouponId = null;
-                coupon = null;
+
+            {   //throw validation exception for customer to let him know that coupon is no longer valid
+                throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+                {
+                    ["coupon"] = [$"Coupon '{coupon.Code}' is no longer valid. Please remove it from your cart and try again."]
+                });
             }
 
             var discountPercentage = coupon?.DiscountPercentage ?? 0;
