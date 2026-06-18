@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="EPPlus" Version="8.6.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
@@ -29,5 +30,9 @@
     <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />
   </ItemGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
 
 </Project>

@@ -1,5 +1,6 @@
 ﻿using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
+using Microsoft.AspNetCore.Http;   // IFormFile (TB-42)
 using Buyit.Domain.Entities;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
@@ -21,20 +22,23 @@ public class ProductService : IProductService
     private readonly IValidator<CreateProductRequest> _createValidator;
     private readonly IValidator<UpdateProductRequest> _updateValidator;
     private readonly ICacheService _cache;
+    private readonly IBlobStorageService _blob;   // TB-42: uploads/deletes product images
     private readonly ILogger<ProductService> _logger;
 
     public ProductService(
      AppDbContext db,
      IValidator<CreateProductRequest> createValidator,
      IValidator<UpdateProductRequest> updateValidator,
-     ICacheService cache,                 
-     ILogger<ProductService> logger)      
+     ICacheService cache,
+     IBlobStorageService blob,            // <-- new (TB-42)
+     ILogger<ProductService> logger)
     {
         _db = db;
         _createValidator = createValidator;
         _updateValidator = updateValidator;
-        _cache = cache;                      
-        _logger = logger;                    
+        _cache = cache;
+        _blob = blob;                        // <-- new (TB-42)
+        _logger = logger;
     }
 
     public async Task<PaginatedResult<ProductResponse>> GetAllAsync(ProductQueryParameters query)
@@ -276,6 +280,49 @@ public class ProductService : IProductService
 
         // --- INVALIDATE: a deleted product must vanish from caches too.
         await _cache.InvalidateProductAsync(id);
+    }
+
+    public async Task<string> SetProductImageAsync(int id, IFormFile file)
+    {
+        // 1) Load the TRACKED product so EF can persist our change to ImageUrl.
+        //    The global query filter means a soft-deleted product won't be found.
+        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
+        if (product is null)
+            throw new NotFoundException($"Product with id {id} was not found.");
+
+        // 2) Push the file to Azure and get its public URL back.
+        //    "product-images" must match the container created in the portal.
+        string url = await _blob.UploadAsync(file, "product-images", id);
+
+        // 3) Save the URL onto the product row (one UPDATE).
+        product.ImageUrl = url;
+        await _db.SaveChangesAsync();
+
+        // 4) INVALIDATE: the product changed, so drop its single cache AND all list caches
+        //    (identical to the pattern in UpdateAsync/DeleteAsync).
+        await _cache.RemoveByPatternAsync("products:*");
+        await _cache.RemoveAsync($"product:{id}");
+
+        return url;
+    }
+
+    public async Task RemoveProductImageAsync(int id)
+    {
+        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
+        if (product is null)
+            throw new NotFoundException($"Product with id {id} was not found.");
+
+        // Delete the blob from Azure first (no-op if there's no image / it's already gone).
+        if (!string.IsNullOrWhiteSpace(product.ImageUrl))
+            await _blob.DeleteAsync(product.ImageUrl);
+
+        // Then clear the database field and save.
+        product.ImageUrl = null;
+        await _db.SaveChangesAsync();
+
+        // Same cache invalidation as every other product write.
+        await _cache.RemoveByPatternAsync("products:*");
+        await _cache.RemoveAsync($"product:{id}");
     }
 
     // ----- Limits that mirror the DATABASE so a bad row is reported, never crashes SaveChanges. -----

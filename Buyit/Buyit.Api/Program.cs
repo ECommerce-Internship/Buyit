@@ -15,6 +15,7 @@ using Serilog;
 using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
+using Azure.Storage.Blobs;
 
 // Bootstrap logger — captures startup errors before the host config is loaded
 Log.Logger = new LoggerConfiguration()
@@ -129,6 +130,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
     ConnectionMultiplexer.Connect(redisConnectionString ?? "localhost:6379"));
+
+
+var blobConnectionString = builder.Configuration.GetConnectionString("AzureBlobStorage");
+builder.Services.AddSingleton(new BlobServiceClient(blobConnectionString));
+
+builder.Services.AddScoped<IBlobStorageService, AzureBlobStorageService>();
 
 var app = builder.Build();
 

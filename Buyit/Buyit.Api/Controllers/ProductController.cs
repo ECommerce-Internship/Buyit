@@ -103,4 +103,43 @@ public class ProductController : ControllerBase
         var result = await _products.ImportAsync(memory);
         return Ok(result);
     }
+
+    /// <summary>Upload (or replace) a product's image. Admin only. multipart/form-data.</summary>
+    [HttpPost("{id:int}/image")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UploadImage(int id, IFormFile file)
+    {
+        // 1) There must be a file with content.
+        if (file is null || file.Length == 0)
+            return BadRequest("No file was uploaded.");
+
+        // 2) Only jpg/jpeg/png allowed. Check the extension (case-insensitive).
+        var extension = Path.GetExtension(file.FileName ?? string.Empty).ToLowerInvariant();
+        var allowed = new[] { ".jpg", ".jpeg", ".png" };
+        if (!allowed.Contains(extension))
+            return BadRequest("Only .jpg, .jpeg, or .png images are allowed.");
+
+        // 3) Max 5 MB. 5 * 1024 * 1024 bytes = 5 megabytes.
+        const long maxBytes = 5L * 1024 * 1024;
+        if (file.Length > maxBytes)
+            return BadRequest("Image must be 5 MB or smaller.");
+
+        // 4) Delegate: upload + save URL + invalidate cache happen in the service.
+        var url = await _products.SetProductImageAsync(id, file);
+        return Ok(url);
+    }
+
+    /// <summary>Remove a product's image. Admin only.</summary>
+    [HttpDelete("{id:int}/image")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteImage(int id)
+    {
+        await _products.RemoveProductImageAsync(id);
+        return NoContent();
+    }
 }
