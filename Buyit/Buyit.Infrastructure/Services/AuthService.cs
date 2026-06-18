@@ -4,6 +4,7 @@ using System.Text;
 using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
+using Buyit.Domain.Common;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
@@ -58,18 +59,22 @@ public class AuthService : IAuthService
             throw new ValidationException(errors);
         }
 
-        // 2) Reject duplicate email -> 409
-        var emailTaken = await _db.Users.AnyAsync(u => u.Email == request.Email);
+        // 2) Canonicalize the email so register and login (and the Google path) all
+        //    compare and store the SAME form — case/whitespace can't create duplicates.
+        var email = EmailNormalizer.Normalize(request.Email);
+
+        // 3) Reject duplicate email -> 409
+        var emailTaken = await _db.Users.AnyAsync(u => u.Email == email);
         if (emailTaken)
             throw new ConflictException("An account with this email already exists.");
 
-        // 3) Hash the password with BCrypt, work factor 12 (never store plaintext)
+        // 4) Hash the password with BCrypt, work factor 12 (never store plaintext)
         var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12);
 
-        // 4) Create the user as a Customer and save (SaveChanges assigns user.Id)
+        // 5) Create the user as a Customer and save (SaveChanges assigns user.Id)
         var user = new User
         {
-            Email = request.Email,
+            Email = email,
             FirstName = request.FirstName,
             LastName = request.LastName,
             PhoneNumber = request.PhoneNumber,
@@ -79,18 +84,23 @@ public class AuthService : IAuthService
         _db.Users.Add(user);
         await _db.SaveChangesAsync();
 
-        // 5) Issue tokens, persist the refresh token, return the response
+        // 6) Issue tokens, persist the refresh token, return the response
         return await IssueTokensAsync(user);
     }
 
     public async Task<AuthResponse> LoginAsync(LoginRequest request)
     {
-        // 1) Look up the user by email
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
+        // 1) Look up the user by email (normalized so casing/whitespace still matches)
+        var email = EmailNormalizer.Normalize(request.Email);
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
 
-        // 2) Same generic error for "no such user" AND "wrong password"
-        //    (prevents attackers from discovering which emails exist)
-        if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        // 2) Same generic error for "no such user", "no password set", AND "wrong password".
+        //    The PasswordHash null-check guards Google-only accounts: BCrypt.Verify throws
+        //    on a null hash, which would otherwise surface as a 500 and leak (via 500-vs-401)
+        //    that the email exists as a Google account — a user-enumeration oracle.
+        if (user is null
+            || user.PasswordHash is null
+            || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
         {
             // LOG 5 (The Final Meaningful Log): Security Audit tracking authentication failures
             _logger.LogWarning("Failed login attempt detected for Identity Email: {UserEmail}", request.Email);
@@ -198,14 +208,20 @@ public class AuthService : IAuthService
         if (user is null)
             throw new NotFoundException("User not found.");
 
-        // 3) Re-verify the CURRENT password against the stored hash -> 401 if wrong (3.8).
+        // 3) Google-only accounts have no password to change. Reject clearly instead of
+        //    letting BCrypt.Verify throw on a null hash (which would surface as a 500).
+        if (user.PasswordHash is null)
+            throw new ConflictException(
+                "This account uses Google sign-in and has no password to change.");
+
+        // 4) Re-verify the CURRENT password against the stored hash -> 401 if wrong (3.8).
         if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
             throw new UnauthorizedException("Current password is incorrect.");
 
-        // 4) Hash the NEW password (work factor 12, like RegisterAsync).
+        // 5) Hash the NEW password (work factor 12, like RegisterAsync).
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12);
 
-        // 5) Revoke ALL of this user's still-active refresh tokens so every existing
+        // 6) Revoke ALL of this user's still-active refresh tokens so every existing
         //    session is logged out. A password change often means "I may be compromised";
         //    an attacker holding an old refresh token must not be able to keep minting
         //    access tokens after the password changes. EF is tracking each loaded token,
