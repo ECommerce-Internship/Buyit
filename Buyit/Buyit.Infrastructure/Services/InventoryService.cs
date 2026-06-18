@@ -10,11 +10,16 @@ public class InventoryService : IInventoryService
 {
     private readonly AppDbContext _context;
     private readonly ILowStockAlertService _lowStockAlertService;
+    private readonly ICacheService _cache;
 
-    public InventoryService(AppDbContext context, ILowStockAlertService lowStockAlertService)
+    public InventoryService(
+        AppDbContext context,
+        ILowStockAlertService lowStockAlertService,
+        ICacheService cache)
     {
         _context = context;
         _lowStockAlertService = lowStockAlertService;
+        _cache = cache;
     }
 
     // GET ALL: Joins Inventory with Products, excludes soft-deleted, ordered by quantity ascending
@@ -55,6 +60,10 @@ public class InventoryService : IInventoryService
         inventory.LastUpdated = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
+
+        // Stock is part of the cached ProductResponse, so drop this product's caches AFTER
+        // the commit (fail-open: a Redis outage won't break the stock update).
+        await _cache.InvalidateProductAsync(productId);
 
         // Trigger low stock alert if quantity dropped to or below threshold
         if (newQuantity <= inventory.LowStockThreshold)
