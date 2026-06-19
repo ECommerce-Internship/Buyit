@@ -1,7 +1,7 @@
 ---
 name: buyit-review
 description: Strict, senior-grade code review for the Buyit codebase. Reviews a git diff, named files, or the whole solution line by line against Buyit's mandatory architecture, error-handling, validation, DTO, security, .NET-correctness, and testing rules. Flags bugs, security issues (with OWASP/CWE references), dependency/reference mismatches, and inconsistencies of any size — each with a confidence level. NEVER edits code — it produces a documented, step-by-step guide explaining each issue, its fix, and the concepts behind it. Use when asked to review, audit, or check Buyit code.
-version: 2.0
+version: 2.1
 origin: TB-82
 ---
 
@@ -24,8 +24,36 @@ truth for the "chosen standard" when you flag an inconsistency.
    real code (and that the thing it references really is wrong) before reporting it. Tag each
    finding with a confidence level. Better to mark something `Needs-verification` than to assert a
    false positive.
-4. **Justify every finding** with the concept behind it, so the reader learns, not just patches.
-5. **Cite the standard** for security findings (OWASP Top 10 ID and/or CWE number).
+4. **Double-check, think harder, and analyze everything needed before concluding an issue is
+   present.** Do not report a finding on a first impression. See "Before you conclude an issue is
+   present" below — it is mandatory for every finding.
+5. **Justify every finding** with the concept behind it, so the reader learns, not just patches.
+6. **Cite the standard** for security findings (OWASP Top 10 ID and/or CWE number).
+
+## Before you conclude an issue is present (MANDATORY for every finding)
+
+Slow down and **think harder** before you write down any finding. A senior review is judged as much
+by what it *correctly does not flag* as by what it catches. For each candidate issue, you MUST:
+
+1. **Re-read the actual code** — open the exact lines again; do not rely on memory, a grep hit, or a
+   pattern you "expect" to be there. Quote the real code.
+2. **Trace the full context** — follow the method's callers and callees, the DI registration, the
+   middleware pipeline, the EF model config, the validators, and any related migration. An issue
+   that looks real in one file is often already handled elsewhere (e.g. a missing transaction that
+   exists in the caller; a missing clamp that lives in the DTO setter; a check done in middleware).
+3. **Look for the mitigation that already exists** — actively try to *disprove* your own finding.
+   Ask: "Is there a guard, attribute, filter, config, or convention that already prevents this?"
+   If yes, do not flag it (or flag only the residual gap).
+4. **Confirm the reference really is wrong** — when something is referenced (a claim name, config
+   key, interface member, navigation property, registration), go verify the target exists and the
+   names/signatures match exactly. Do not assume a mismatch.
+5. **Decide confidence honestly** — only mark `Confirmed` when you have re-read the code and ruled
+   out mitigations. If anything still depends on runtime/config/behavior you could not inspect, mark
+   it `Likely` or `Needs-verification` and state exactly what to check. **When in doubt, downgrade
+   confidence rather than overstate.**
+
+If you cannot complete these steps for a candidate issue, either do the work to complete them or
+report it as `Needs-verification` with the open question — never as a confident finding.
 
 ## Severity levels (use these definitions — don't rank by feel)
 
