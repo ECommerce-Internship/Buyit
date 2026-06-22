@@ -93,6 +93,17 @@ builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductReques
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+// --- TB-46: Gemini AI product-content feature registrations ---
+builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
+
+builder.Services.AddHttpClient("GeminiClient", client =>
+{
+    client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+builder.Services.AddScoped<IGeminiService, GeminiService>();
+builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
@@ -162,7 +173,8 @@ app.UseSerilogRequestLogging(options =>
             if (authException is Buyit.Domain.Exceptions.UnauthorizedException || 
                 authException is Buyit.Domain.Exceptions.ValidationException ||
                 authException is Buyit.Domain.Exceptions.NotFoundException ||
-                authException is Buyit.Domain.Exceptions.ConflictException)
+                authException is Buyit.Domain.Exceptions.ConflictException ||
+                authException is Buyit.Domain.Exceptions.ExternalServiceException)
             {
                 return Serilog.Events.LogEventLevel.Warning; 
             }
