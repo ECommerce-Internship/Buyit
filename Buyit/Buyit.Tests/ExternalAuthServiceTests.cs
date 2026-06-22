@@ -56,6 +56,7 @@ public class ExternalAuthServiceTests
     {
         Subject = "google-sub-1234567890",       // the permanent Google id ("sub")
         Email = "carl@gmail.com",
+        EmailVerified = true,                 // Google confirmed the user owns this email
         Name = "Carl Ibrahim",                // will be split into First="Carl", Last="Ibrahim"
         Picture = "https://example.com/avatar.png"
     };
