@@ -19,7 +19,15 @@
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="EPPlus" Version="8.6.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
+    <!-- Pin EF Core runtime + design-time to 10.0.8 so all EF packages stay on one version.
+         Npgsql 10.0.2 only floors EF Core at 10.0.4, and EF Tools floors Design at 8.0.0;
+         without these explicit pins the graph resolves to mismatched 10.0.4 / 8.0.0. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.8">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.8">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

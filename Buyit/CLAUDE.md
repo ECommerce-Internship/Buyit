@@ -10,7 +10,7 @@ dependency rules, and the mandatory patterns every contribution must follow.
 
 Buyit is an e-commerce backend: an ASP.NET Core **Web API** built on **.NET 10** using
 **Clean Architecture**. It covers auth (JWT + Google OAuth), products, categories,
-inventory, carts, and orders, with EF Core (SQL Server), Redis caching, Serilog→Seq
+inventory, carts, and orders, with EF Core (PostgreSQL via Npgsql), Redis caching, Serilog→Seq
 logging, and Azure Blob storage.
 
 The solution file is `Buyit.slnx` (the new XML solution format). There is **no `.sln`** —
@@ -39,7 +39,7 @@ dotnet test --filter "FullyQualifiedName~CategoryServiceTests"
 dotnet test --filter "FullyQualifiedName~CategoryServiceTests.CreateCategory_ValidRequest_ReturnsCategory"
 ```
 Tests live in `Buyit.Tests` (xUnit). They use an **in-memory EF Core database**, so they
-need **no SQL Server or Docker** to run.
+need **no PostgreSQL or Docker** to run.
 
 ### Run the API
 ```bash
@@ -51,7 +51,7 @@ Launch profiles (`Buyit.Api/Properties/launchSettings.json`):
 
 In **Development** the app, on startup, **applies pending EF migrations and seeds the
 database automatically** (see `Program.cs` → `db.Database.Migrate()` + `DbInitializer.Seed`).
-So the SQL Server container (section 4) must be running before you start the API.
+So the PostgreSQL container (section 4) must be running before you start the API.
 
 Useful endpoints in Development:
 - Swagger UI: `/swagger`
@@ -61,7 +61,7 @@ Useful endpoints in Development:
 Connection strings and settings come from `appsettings.json` /
 `appsettings.Development.json`. Copy `appsettings.Development.example.json` to
 `appsettings.Development.json` and fill in values. Keys the app reads:
-- `ConnectionStrings:DefaultConnection` — SQL Server
+- `ConnectionStrings:DefaultConnection` — PostgreSQL (Npgsql: `Host=...;Port=5432;Database=...;Username=...;Password=...`)
 - `ConnectionStrings:Redis` — Redis (defaults to `localhost:6379`)
 - `ConnectionStrings:AzureBlobStorage` — Azure Blob (or Azurite)
 - `Jwt:Issuer` / `Jwt:Audience` / `Jwt:Secret` / `Jwt:ExpiryMinutes`
@@ -110,6 +110,15 @@ Notes:
 `docker-compose.yml` (in the solution folder) provides the **backing services only** — the
 API itself is run via `dotnet run`/Visual Studio, not in a container.
 
+The Postgres credentials are **not** hard-coded in `docker-compose.yml`; they are read from a
+gitignored **`.env`** file (Compose auto-loads it). Before the first `docker compose up`, copy
+the committed template and fill in your password — the same example/real split used for
+`appsettings.Development.json`:
+
+```bash
+cp .env.example .env      # then edit .env; keep it in sync with appsettings.Development.json
+```
+
 ```bash
 docker compose up -d      # start all backing services
 docker compose ps         # check status
@@ -120,12 +129,12 @@ Services and ports:
 
 | Service        | Image                                   | Port(s)        | Purpose                          |
 | -------------- | --------------------------------------- | -------------- | -------------------------------- |
-| `sqlserver`    | `mcr.microsoft.com/mssql/server:2022`   | `1433`         | Primary database                 |
+| `postgres`     | `postgres:16`                           | `5432`         | Primary database                 |
 | `redis`        | `redis:7-alpine`                        | `6379`         | Caching (`ICacheService`)        |
 | `redisinsight` | `redis/redisinsight:latest`             | `5540`         | Redis GUI (`http://localhost:5540`) |
 | `seq`          | `datalust/seq`                          | `5341`→`80`    | Structured logs (`http://localhost:5341`) |
 
-Typical local startup order: `docker compose up -d` → wait for SQL Server → `dotnet run --project Buyit.Api`.
+Typical local startup order: `docker compose up -d` → wait for PostgreSQL → `dotnet run --project Buyit.Api`.
 
 ---
 
@@ -289,6 +298,10 @@ form; older controllers (e.g. `CategoryController`) should be migrated to it whe
   `IConnectionMultiplexer` (Redis) and `BlobServiceClient` are `Singleton`.
 - **Async all the way:** service and controller methods are `async Task<...>`; EF calls use
   the `...Async` variants.
+- **UTC timestamps (Npgsql):** the Postgres provider maps `DateTime` to `timestamp with time
+  zone` and **requires `DateTimeKind.Utc`**. Always use `DateTime.UtcNow` (never `DateTime.Now`
+  or `new DateTime(...)`, which are `Local`/`Unspecified`) for any value stored or compared in
+  the DB — a non-UTC `DateTime` throws at insert time, not compile time.
 
 ---
 
