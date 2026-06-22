@@ -111,7 +111,8 @@ public class ProductService : IProductService
                 CategoryId = p.CategoryId,
                 CategoryName = p.Category.Name,                       // joined from Category
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewCount = p.Reviews.Count
             })
             .ToListAsync();   // <-- THE database is hit HERE, exactly once.
 
@@ -160,7 +161,8 @@ public class ProductService : IProductService
                 CategoryId = p.CategoryId,
                 CategoryName = p.Category.Name,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewCount = p.Reviews.Count
             })
             .FirstOrDefaultAsync();
 

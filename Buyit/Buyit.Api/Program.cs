@@ -10,6 +10,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql.EntityFrameworkCore.PostgreSQL;
 using OfficeOpenXml;
 using Serilog;
 using StackExchange.Redis;
@@ -88,6 +89,9 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 // --- TB-40: Payment feature registrations ---
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequestValidator>();
+// --- TB-41: Review feature registrations ---
+builder.Services.AddScoped<IReviewService, ReviewService>();
+builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 // --- TB-32: Product feature registrations ---
 builder.Services.AddScoped<IProductService, ProductService>();

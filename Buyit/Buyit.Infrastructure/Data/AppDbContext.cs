@@ -154,6 +154,13 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<UserExternalLogin>()
                 .HasIndex(el => new { el.Provider, el.ProviderUserId })
                 .IsUnique();
+            // A user may review a given product at most ONCE. Enforced at the database
+            // level so the application-code check in ReviewService can't be defeated by a
+            // concurrent double-submit (TOCTOU race) — the second insert hits this index
+            // and fails with Postgres 23505, which the service maps to a 409 Conflict.
+            modelBuilder.Entity<Review>()
+                .HasIndex(r => new { r.UserId, r.ProductId })
+                .IsUnique();
 
             // ========== DECIMAL PRECISION ==========
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
