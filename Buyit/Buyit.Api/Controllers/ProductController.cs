@@ -62,6 +62,35 @@ public class ProductController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Generate AI marketing content (description, features, SEO title, meta description) for an
+    /// existing product. <b>Admin only.</b>
+    /// <para>
+    /// This returns a <b>SUGGESTION for review — it is NOT saved.</b> To keep any of it, the admin
+    /// must explicitly call <c>PUT /api/v1/products/{id}</c> with the chosen values.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// Prefer this endpoint for any product that already exists: it reads the product's name and
+    /// category from the database, so the caller only sends <c>specs</c>. Use the free-form
+    /// <c>POST /api/v1/ai/product-content</c> only when no product row exists yet (e.g. drafting
+    /// before creation), where the caller must supply the name and category explicitly.
+    /// </remarks>
+    [HttpPost("{id:int}/generate-content")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(ProductContentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<ProductContentResponse>> GenerateContent(
+        int id, [FromBody] GenerateContentRequest request)
+    {
+        var suggestion = await _products.GenerateContentAsync(id, request);
+        return Ok(suggestion);
+    }
+
     /// <summary>Soft-delete a product. Returns 204 No Content.</summary>
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

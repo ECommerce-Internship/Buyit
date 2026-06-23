@@ -93,6 +93,8 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
+// TB-47: validator for the product generate-content endpoint.
+builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRequestValidator>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();

@@ -34,4 +34,10 @@ public interface IProductService
 
     // TB-42: remove this product's image (deletes the blob and clears ImageUrl).
     Task RemoveProductImageAsync(int id);
+
+    // TB-47: ask the AI to DRAFT marketing content for an existing product.
+    // Throws NotFoundException (404) if the product doesn't exist, and
+    // ValidationException (400) if the specs are missing/too long.
+    // IMPORTANT: this does NOT persist anything — it only returns a suggestion.
+    Task<ProductContentResponse> GenerateContentAsync(int id, GenerateContentRequest request);
 }
