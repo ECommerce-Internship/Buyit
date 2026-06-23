@@ -37,4 +37,7 @@ public class User
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<UserExternalLogin> ExternalLogins { get; set; } = new List<UserExternalLogin>();
+
+    // Stores this user owns (empty for customers/admins; one or more for sellers).
+    public ICollection<Store> Stores { get; set; } = new List<Store>();
 }

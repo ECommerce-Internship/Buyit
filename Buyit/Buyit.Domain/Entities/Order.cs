@@ -15,6 +15,14 @@ public class Order
     // Total captured at purchase time.
     public decimal TotalAmount { get; set; }
 
+    // Money discounted at checkout (snapshot). 0 when no coupon was applied.
+    public decimal DiscountAmount { get; set; }
+
+    // The coupon used, if any. Null = no coupon. FK -> Coupon.
+    public int? CouponId { get; set; }
+    public Coupon? Coupon { get; set; }
+
+
     // ---- Shipping address SNAPSHOT ----
     // Captured onto the order at checkout, NOT read from the User. The customer can change
     // their profile address after ordering, but the order must always ship to where it was
@@ -39,6 +47,8 @@ public class Order
     public User User { get; set; } = null!;
 
     public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+
+    public ICollection<StoreOrder> StoreOrders { get; set; } = new List<StoreOrder>();
 
     // One-to-one: each order has exactly one payment.
     public Payment? Payment { get; set; }
