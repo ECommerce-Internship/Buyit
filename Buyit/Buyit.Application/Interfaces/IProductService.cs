@@ -16,6 +16,9 @@ public interface IProductService
     // Read ONE by id — throws NotFoundException if it doesn't exist.
     Task<ProductResponse> GetByIdAsync(int id);
 
+    // Products for one APPROVED store, by slug (paged). 404 if the store isn't approved/found.
+    Task<PaginatedResult<ProductResponse>> GetByStoreSlugAsync(string slug, ProductQueryParameters query);
+
     // Create — throws ConflictException if the SKU is already taken.
     Task<ProductResponse> CreateAsync(CreateProductRequest request);
 

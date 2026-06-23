@@ -8,6 +8,7 @@ using OfficeOpenXml;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
+using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
@@ -38,6 +39,19 @@ public class ProductServiceTests
 
         db = new AppDbContext(options);
 
+        // Every product needs an owning store (StoreId is NOT NULL). Seed one approved
+        // store (Id = 1) that tests assign their products to.
+        db.Stores.Add(new Store
+        {
+            Id = 1,
+            OwnerUserId = 1,
+            Name = "Test Store",
+            Slug = "test-store",
+            Status = StoreStatus.Approved,
+            CommissionRate = 0m
+        });
+        db.SaveChanges();
+
         createValidatorMock = new Mock<IValidator<CreateProductRequest>>();
         createValidatorMock
             .Setup(v => v.ValidateAsync(It.IsAny<CreateProductRequest>(), default))
@@ -66,12 +80,19 @@ public class ProductServiceTests
             .Setup(v => v.ValidateAsync(It.IsAny<GenerateContentRequest>(), default))
             .ReturnsAsync(new ValidationResult());
 
+        // Current user mocked as an Admin so ownership checks pass — these tests exercise
+        // ProductService logic, not authorization (dedicated ownership tests come in TB-131).
+        var currentUserMock = new Mock<ICurrentUserService>();
+        currentUserMock.Setup(c => c.IsAdmin).Returns(true);
+        currentUserMock.Setup(c => c.UserId).Returns(1);
+
         return new ProductService(
             db,
             createValidatorMock.Object,
             updateValidatorMock.Object,
             cacheMock.Object,
             blobMock.Object,
+            currentUserMock.Object,
             geminiMock.Object,
             generateContentValidatorMock.Object,
             loggerMock.Object);
@@ -124,6 +145,7 @@ public class ProductServiceTests
             Sku = "MOUSE-001",
             Price = 24.99m,
             CategoryId = 1,
+            StoreId = 1,
             InitialStock = 50
         };
 
@@ -150,7 +172,8 @@ public class ProductServiceTests
             Description = "Already in catalogue",
             Sku = "MOUSE-001",
             Price = 19.99m,
-            CategoryId = 1
+            CategoryId = 1,
+            StoreId = 1
         });
         await db.SaveChangesAsync();
 
@@ -161,6 +184,7 @@ public class ProductServiceTests
             Sku = "MOUSE-001",
             Price = 29.99m,
             CategoryId = 1,
+            StoreId = 1,
             InitialStock = 10
         };
 
@@ -183,6 +207,7 @@ public class ProductServiceTests
             Sku = "HEAD-042",
             Price = 149.50m,
             CategoryId = 7,
+            StoreId = 1,
             ImageUrl = "https://example.com/h.png",
             Inventory = new Inventory { QuantityInStock = 8 }
         });
@@ -293,7 +318,8 @@ public class ProductServiceTests
             Description = "old text",
             Sku = "PX-1",
             Price = 999m,
-            Category = category
+            Category = category,
+            StoreId = 1
         };
         db.Products.Add(product);
         await db.SaveChangesAsync();

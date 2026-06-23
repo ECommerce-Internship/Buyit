@@ -2,6 +2,7 @@
 using Buyit.Application.Interfaces;
 using Microsoft.AspNetCore.Http;   // IFormFile (TB-42)
 using Buyit.Domain.Entities;
+using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using FluentValidation;
@@ -23,6 +24,7 @@ public class ProductService : IProductService
     private readonly IValidator<UpdateProductRequest> _updateValidator;
     private readonly ICacheService _cache;
     private readonly IBlobStorageService _blob;   // TB-42: uploads/deletes product images
+    private readonly ICurrentUserService _currentUser;   // TB-125: ownership checks
     private readonly ILogger<ProductService> _logger;
     private readonly IGeminiService _gemini;                              // TB-47: AI content generator
     private readonly IValidator<GenerateContentRequest> _generateContentValidator;  // TB-47
@@ -33,6 +35,7 @@ public class ProductService : IProductService
      IValidator<UpdateProductRequest> updateValidator,
      ICacheService cache,
      IBlobStorageService blob,            // <-- new (TB-42)
+     ICurrentUserService currentUser,     // <-- new (TB-125)
      IGeminiService gemini,                                          // <-- new (TB-47)
      IValidator<GenerateContentRequest> generateContentValidator,    // <-- new (TB-47)
      ILogger<ProductService> logger)
@@ -42,9 +45,24 @@ public class ProductService : IProductService
         _updateValidator = updateValidator;
         _cache = cache;
         _blob = blob;                        // <-- new (TB-42)
+        _currentUser = currentUser;          // <-- new (TB-125)
         _logger = logger;
         _gemini = gemini;                                           // <-- new (TB-47)
         _generateContentValidator = generateContentValidator;      // <-- new (TB-47)
+    }
+
+    // TB-125: throws 403 unless the caller is an admin or owns the given store.
+    private async Task EnsureCanManageStoreAsync(int storeId)
+    {
+        if (_currentUser.IsAdmin) return;                       // admin bypasses
+
+        var userId = _currentUser.UserId;
+        if (userId is null)
+            throw new ForbiddenException("You are not allowed to manage this product.");
+
+        var ownsStore = await _db.Stores.AnyAsync(s => s.Id == storeId && s.OwnerUserId == userId);
+        if (!ownsStore)
+            throw new ForbiddenException("You can only manage products in your own store.");
     }
 
     public async Task<PaginatedResult<ProductResponse>> GetAllAsync(ProductQueryParameters query)
@@ -59,6 +77,9 @@ public class ProductService : IProductService
         // STAGE 1 — start the query. Nothing runs yet; this is an IQueryable (a plan).
         // The global query filter in AppDbContext already excludes IsDeleted == true.
         IQueryable<Product> products = _db.Products;
+
+        // Marketplace (TB-124): public browsing shows only products from APPROVED stores.
+        products = products.Where(p => p.Store.Status == StoreStatus.Approved);
 
         // STAGE 2 — FILTERING. Each filter is applied ONLY if the client supplied it.
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -116,8 +137,12 @@ public class ProductService : IProductService
                 CreatedAt = p.CreatedAt,
                 CategoryId = p.CategoryId,
                 CategoryName = p.Category.Name,                       // joined from Category
+                StoreId = p.StoreId,
+                StoreName = p.Store.Name,
+                StoreSlug = p.Store.Slug,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewCount = p.Reviews.Count
             })
             .ToListAsync();   // <-- THE database is hit HERE, exactly once.
 
@@ -145,15 +170,94 @@ public class ProductService : IProductService
     {
         // --- CACHE-ASIDE (read): individual product cached under "product:{id}". ---
         string cacheKey = $"product:{id}";
-        var cached = await _cache.GetAsync<ProductResponse>(cacheKey);
-        if (cached is not null)
-            return cached;   // HIT
+        var product = await _cache.GetAsync<ProductResponse>(cacheKey);
+        if (product is null)
+        {
+            _logger.LogInformation("Querying DATABASE for product {ProductId}", id);
 
-        _logger.LogInformation("Querying DATABASE for product {ProductId}", id);
+            // Project straight into the DTO; the global filter still hides soft-deleted rows.
+            product = await _db.Products
+                .Where(p => p.Id == id)
+                .Select(p => new ProductResponse
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    Description = p.Description,
+                    Sku = p.Sku,
+                    Price = p.Price,
+                    ImageUrl = p.ImageUrl,
+                    CreatedAt = p.CreatedAt,
+                    CategoryId = p.CategoryId,
+                    CategoryName = p.Category.Name,
+                    StoreId = p.StoreId,
+                    StoreName = p.Store.Name,
+                    StoreSlug = p.Store.Slug,
+                    QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
+                    AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                    ReviewCount = p.Reviews.Count
+                })
+                .FirstOrDefaultAsync();
 
-        // Project straight into the DTO; the global filter still hides soft-deleted rows.
-        var product = await _db.Products
-            .Where(p => p.Id == id)
+            // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
+            if (product is null)
+                throw new NotFoundException($"Product with id {id} was not found.");
+
+            // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
+            await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
+        }
+
+        // M3: a product whose store isn't Approved is hidden from the public (browsing rule),
+        // but the owning seller and admins may still fetch it (e.g. the create/update re-fetch).
+        await EnsureProductVisibleAsync(product.StoreId, id);
+
+        return product;
+    }
+
+    // Throws 404 if the product's store isn't Approved AND the caller is neither an admin nor
+    // the store owner. Keeps non-approved stores out of public browsing while letting owners
+    // and admins (and the internal create/update re-fetch they trigger) see their own products.
+    private async Task EnsureProductVisibleAsync(int storeId, int productId)
+    {
+        var store = await _db.Stores
+            .Where(s => s.Id == storeId)
+            .Select(s => new { s.Status, s.OwnerUserId })
+            .FirstOrDefaultAsync();
+
+        if (store is null)
+            throw new NotFoundException($"Product with id {productId} was not found.");
+
+        if (store.Status == StoreStatus.Approved) return;
+        if (_currentUser.IsAdmin) return;
+        if (_currentUser.UserId == store.OwnerUserId) return;
+
+        throw new NotFoundException($"Product with id {productId} was not found.");
+    }
+    public async Task<PaginatedResult<ProductResponse>> GetByStoreSlugAsync(string slug, ProductQueryParameters query)
+    {
+        // The store must exist AND be approved to be publicly browsable.
+        var store = await _db.Stores
+            .FirstOrDefaultAsync(s => s.Slug == slug && s.Status == StoreStatus.Approved);
+        if (store is null)
+            throw new NotFoundException($"No approved store with slug '{slug}' was found.");
+
+        IQueryable<Product> products = _db.Products.Where(p => p.StoreId == store.Id);
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+            products = products.Where(p => p.Name.Contains(query.Search));
+        if (query.CategoryId is not null)
+            products = products.Where(p => p.CategoryId == query.CategoryId);
+        if (query.MinPrice is not null)
+            products = products.Where(p => p.Price >= query.MinPrice);
+        if (query.MaxPrice is not null)
+            products = products.Where(p => p.Price <= query.MaxPrice);
+
+        var totalCount = await products.CountAsync();
+
+        products = products.OrderBy(p => p.Name).ThenBy(p => p.Id);
+
+        var items = await products
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
             .Select(p => new ProductResponse
             {
                 Id = p.Id,
@@ -165,19 +269,24 @@ public class ProductService : IProductService
                 CreatedAt = p.CreatedAt,
                 CategoryId = p.CategoryId,
                 CategoryName = p.Category.Name,
+                StoreId = p.StoreId,
+                StoreName = p.Store.Name,
+                StoreSlug = p.Store.Slug,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
             })
-            .FirstOrDefaultAsync();
+            .ToListAsync();
 
-        // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
-        if (product is null)
-            throw new NotFoundException($"Product with id {id} was not found.");
-        // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
-        await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
-
-        return product;
+        return new PaginatedResult<ProductResponse>
+        {
+            Items = items,
+            Page = query.Page,
+            PageSize = query.PageSize,
+            TotalCount = totalCount,
+            TotalPages = (int)Math.Ceiling(totalCount / (double)query.PageSize)
+        };
     }
+
     public async Task<ProductResponse> CreateAsync(CreateProductRequest request)
     {
         // 1) VALIDATE shape -> 400 via middleware if it fails (same pattern as AuthService).
@@ -190,18 +299,21 @@ public class ProductService : IProductService
             throw new ValidationException(errors);
         }
 
-        // 2a) The category must actually exist (validator only checked it's > 0).
+        // 2a) Ownership (TB-125): a seller may only create in their own store; admin -> any store.
+        await EnsureCanManageStoreAsync(request.StoreId);
+
+        // 2b) The category must actually exist (validator only checked it's > 0).
         var categoryExists = await _db.Categories.AnyAsync(c => c.Id == request.CategoryId);
         if (!categoryExists)
             throw new NotFoundException($"Category with id {request.CategoryId} was not found.");
 
-        // 2b) SKU must be unique -> 409 Conflict if already used.
-        //     IgnoreQueryFilters() so even a soft-deleted product's SKU still counts as taken.
+        // 2c) SKU must be unique WITHIN THE STORE -> 409 if already used (matches the composite
+        //     (StoreId, Sku) index). IgnoreQueryFilters() so a soft-deleted SKU still counts.
         var skuTaken = await _db.Products
             .IgnoreQueryFilters()
-            .AnyAsync(p => p.Sku == request.Sku);
+            .AnyAsync(p => p.StoreId == request.StoreId && p.Sku == request.Sku);
         if (skuTaken)
-            throw new ConflictException($"A product with SKU '{request.Sku}' already exists.");
+            throw new ConflictException($"A product with SKU '{request.Sku}' already exists in this store.");
 
         // 3) Build the Product TOGETHER WITH its one-to-one Inventory record.
         //    Setting the Inventory navigation property lets EF insert BOTH rows inside a
@@ -216,6 +328,7 @@ public class ProductService : IProductService
             Price = request.Price,
             ImageUrl = request.ImageUrl,
             CategoryId = request.CategoryId,
+            StoreId = request.StoreId,
             CreatedAt = DateTime.UtcNow,
             IsDeleted = false,
             Inventory = new Inventory
@@ -249,6 +362,9 @@ public class ProductService : IProductService
         var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
+
+        // Ownership (TB-125): only the owning seller (or an admin) may update this product.
+        await EnsureCanManageStoreAsync(product.StoreId);
 
         // 3) The new category must exist too.
         var categoryExists = await _db.Categories.AnyAsync(c => c.Id == request.CategoryId);
@@ -312,6 +428,9 @@ public class ProductService : IProductService
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
 
+        // Ownership (TB-125): only the owning seller (or an admin) may delete this product.
+        await EnsureCanManageStoreAsync(product.StoreId);
+
         // Soft delete: flip the flag instead of removing the row.
         product.IsDeleted = true;
 
@@ -329,6 +448,9 @@ public class ProductService : IProductService
         var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
+
+        // Ownership (TB-125): only the owning seller (or an admin) may change this image.
+        await EnsureCanManageStoreAsync(product.StoreId);
 
         // 2) Push the file to Azure and get its public URL back.
         //    "product-images" must match the container created in the portal.
@@ -351,6 +473,9 @@ public class ProductService : IProductService
         var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
+
+        // Ownership (TB-125): only the owning seller (or an admin) may remove this image.
+        await EnsureCanManageStoreAsync(product.StoreId);
 
         // Delete the blob from Azure first (no-op if there's no image / it's already gone).
         if (!string.IsNullOrWhiteSpace(product.ImageUrl))

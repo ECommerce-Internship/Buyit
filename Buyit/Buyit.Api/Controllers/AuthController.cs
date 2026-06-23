@@ -32,6 +32,17 @@ public class AuthController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Register as a seller: creates a Seller account + a Pending store, returns tokens.</summary>
+    [HttpPost("register-seller")]
+    [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<AuthResponse>> RegisterSeller([FromBody] RegisterSellerRequest request)
+    {
+        var result = await _auth.RegisterSellerAsync(request);
+        return Ok(result);
+    }
+
     /// <summary>Log in with email + password and receive tokens.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]

@@ -481,6 +481,7 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
+sftp-files/
 
 # Local machine-specific /  sensitive config (DB connection string, JWT secret, etc.)
 # Copy appsettings.Development.example.json to appsettings.Development.json and fill in your own values.

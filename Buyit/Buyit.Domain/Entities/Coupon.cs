@@ -17,6 +17,10 @@ public class Coupon
     public DateTime ExpiryDate { get; set; }
     public bool IsActive { get; set; } = true;
 
+    // Null = platform-wide coupon. Otherwise restricts the coupon to one store.
+    public int? StoreId { get; set; }
+    public Store? Store { get; set; }
+
     // One coupon can be applied to many carts.
     public ICollection<Cart> Carts { get; set; } = new List<Cart>();
 }
