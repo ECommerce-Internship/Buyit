@@ -72,6 +72,11 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IExternalAuthService, ExternalAuthService>();
 builder.Services.AddScoped<IValidator<RegisterRequest>, RegisterRequestValidator>();
+// --- TB-123/124/125: Seller side (stores, seller registration, ownership) ---
+builder.Services.AddScoped<IStoreService, StoreService>();
+builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequestValidator>();
+builder.Services.AddHttpContextAccessor();   // lets CurrentUserService read the request's claims
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IValidator<CreateCategoryRequest>, CreateCategoryRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequestValidator>();
 // TB-76: lets the Google auth controller make a server-to-server call to Google's token endpoint

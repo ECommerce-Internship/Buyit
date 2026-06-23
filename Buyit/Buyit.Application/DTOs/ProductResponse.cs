@@ -18,6 +18,11 @@ public class ProductResponse
     public int CategoryId { get; set; }
     public string CategoryName { get; set; } = string.Empty;
 
+    // Marketplace: which store sells this product ("sold by {StoreName}").
+    public int StoreId { get; set; }
+    public string StoreName { get; set; } = string.Empty;
+    public string StoreSlug { get; set; } = string.Empty;
+
     // Pulled from the one-to-one Inventory record (QuantityInStock — NOT "Quantity").
     public int QuantityInStock { get; set; }
 

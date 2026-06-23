@@ -11,15 +11,32 @@ public class InventoryService : IInventoryService
     private readonly AppDbContext _context;
     private readonly ILowStockAlertService _lowStockAlertService;
     private readonly ICacheService _cache;
+    private readonly ICurrentUserService _currentUser;   // TB-125: ownership checks
 
     public InventoryService(
         AppDbContext context,
         ILowStockAlertService lowStockAlertService,
-        ICacheService cache)
+        ICacheService cache,
+        ICurrentUserService currentUser)
     {
         _context = context;
         _lowStockAlertService = lowStockAlertService;
         _cache = cache;
+        _currentUser = currentUser;
+    }
+
+    // TB-125: throws 403 unless the caller is an admin or owns the given store.
+    private async Task EnsureCanManageStoreAsync(int storeId)
+    {
+        if (_currentUser.IsAdmin) return;
+
+        var userId = _currentUser.UserId;
+        if (userId is null)
+            throw new ForbiddenException("You are not allowed to manage this inventory.");
+
+        var ownsStore = await _context.Stores.AnyAsync(s => s.Id == storeId && s.OwnerUserId == userId);
+        if (!ownsStore)
+            throw new ForbiddenException("You can only manage inventory for your own store's products.");
     }
 
     // GET ALL: Joins Inventory with Products, excludes soft-deleted, ordered by quantity ascending
@@ -55,6 +72,9 @@ public class InventoryService : IInventoryService
 
         if (inventory == null)
             throw new NotFoundException($"Inventory for product with ID {productId} was not found.");
+
+        // Ownership (TB-125): only the owning seller (or an admin) may change this stock.
+        await EnsureCanManageStoreAsync(inventory.Product.StoreId);
 
         inventory.QuantityInStock = newQuantity;
         inventory.LastUpdated = DateTime.UtcNow;
@@ -92,6 +112,9 @@ public class InventoryService : IInventoryService
 
         if (inventory == null)
             throw new NotFoundException($"Inventory for product with ID {productId} was not found.");
+
+        // Ownership (TB-125): only the owning seller (or an admin) may change this threshold.
+        await EnsureCanManageStoreAsync(inventory.Product.StoreId);
 
         inventory.LowStockThreshold = newThreshold;
         inventory.LastUpdated = DateTime.UtcNow;

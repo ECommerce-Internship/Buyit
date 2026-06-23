@@ -19,6 +19,10 @@ public class Store
     [Required, MaxLength(160)]
     public string Slug { get; set; } = string.Empty;
 
+    // Optional marketing blurb shown on the storefront. Nullable: a seller may skip it.
+    [MaxLength(1000)]
+    public string? Description { get; set; }
+
     // Pending until an admin approves. A store cannot sell unless Approved.
     public StoreStatus Status { get; set; } = StoreStatus.Pending;
 

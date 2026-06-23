@@ -12,6 +12,9 @@ public class CreateProductRequest
     // Which category this product belongs to (an int id in THIS project, not a GUID).
     public int CategoryId { get; set; }
 
+    // Marketplace (TB-125): which of the caller's stores this product belongs to.
+    public int StoreId { get; set; }
+
     // The starting stock level — used to create the linked Inventory record.
     public int InitialStock { get; set; }
 }

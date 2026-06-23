@@ -22,6 +22,7 @@ public class AuthService : IAuthService
     private readonly AppDbContext _db;
     private readonly IJwtTokenService _tokens;
     private readonly IValidator<RegisterRequest> _registerValidator;
+    private readonly IValidator<RegisterSellerRequest> _registerSellerValidator;
     private readonly IValidator<UpdateProfileRequest> _updateProfileValidator;
     private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
     private readonly JwtSettings _jwt;
@@ -31,6 +32,7 @@ public class AuthService : IAuthService
       AppDbContext db,
       IJwtTokenService tokens,
       IValidator<RegisterRequest> registerValidator,
+      IValidator<RegisterSellerRequest> registerSellerValidator,
       IValidator<UpdateProfileRequest> updateProfileValidator,
       IValidator<ChangePasswordRequest> changePasswordValidator,
       IOptions<JwtSettings> jwtOptions,
@@ -39,6 +41,7 @@ public class AuthService : IAuthService
         _db = db;
         _tokens = tokens;
         _registerValidator = registerValidator;
+        _registerSellerValidator = registerSellerValidator;
         _updateProfileValidator = updateProfileValidator;
         _changePasswordValidator = changePasswordValidator;
         _jwt = jwtOptions.Value;
@@ -86,6 +89,67 @@ public class AuthService : IAuthService
 
         // 6) Issue tokens, persist the refresh token, return the response
         return await IssueTokensAsync(user);
+    }
+
+    public async Task<AuthResponse> RegisterSellerAsync(RegisterSellerRequest request)
+    {
+        // 1) Validate the shape -> 400 if bad.
+        var validation = await _registerSellerValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Normalize email and reject duplicates -> 409.
+        var email = EmailNormalizer.Normalize(request.Email);
+        if (await _db.Users.AnyAsync(u => u.Email == email))
+            throw new ConflictException("An account with this email already exists.");
+
+        // 3) Build the Seller and their first Pending store TOGETHER, linked by navigation,
+        //    so a single SaveChanges inserts both rows in ONE transaction (atomic).
+        var slug = await GenerateUniqueSlugAsync(request.StoreName);
+        var user = new User
+        {
+            Email = email,
+            FirstName = request.FirstName,
+            LastName = request.LastName,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12),
+            Role = UserRole.Seller,
+            Stores = new List<Store>
+            {
+                new Store
+                {
+                    Name = request.StoreName.Trim(),
+                    Description = request.StoreDescription,
+                    Slug = slug,
+                    Status = StoreStatus.Pending,
+                    CommissionRate = 0.15m,
+                    CreatedAt = DateTime.UtcNow
+                }
+            }
+        };
+        _db.Users.Add(user);
+        await _db.SaveChangesAsync();   // inserts User + Store atomically; assigns ids
+
+        _logger.LogInformation("Registered seller {UserId} with store {Slug}", user.Id, slug);
+
+        // 4) Issue tokens. IssueTokensAsync loads user.Stores, so the JWT carries storeIds.
+        return await IssueTokensAsync(user);
+    }
+
+    // Generates a slug unique against the Stores.Slug index (appends -2, -3, ... if taken).
+    private async Task<string> GenerateUniqueSlugAsync(string name)
+    {
+        var baseSlug = Buyit.Domain.Helpers.SlugGenerator.Generate(name);
+        if (string.IsNullOrEmpty(baseSlug)) baseSlug = "store";
+        var slug = baseSlug;
+        var suffix = 2;
+        while (await _db.Stores.AnyAsync(s => s.Slug == slug))
+            slug = $"{baseSlug}-{suffix++}";
+        return slug;
     }
 
     public async Task<AuthResponse> LoginAsync(LoginRequest request)
