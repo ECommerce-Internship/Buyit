@@ -112,6 +112,7 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
