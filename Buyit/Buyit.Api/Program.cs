@@ -85,6 +85,9 @@ builder.Services.AddScoped<IValidator<PlaceOrderRequest>, PlaceOrderRequestValid
 builder.Services.AddScoped<IValidator<UpdateOrderStatusRequest>, UpdateOrderStatusRequestValidator>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+// --- TB-40: Payment feature registrations ---
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequestValidator>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 // --- TB-32: Product feature registrations ---
 builder.Services.AddScoped<IProductService, ProductService>();
