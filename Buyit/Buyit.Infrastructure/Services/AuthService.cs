@@ -252,6 +252,12 @@ public class AuthService : IAuthService
     // Shared helper: mint access + refresh tokens, store the refresh token, build AuthResponse.
     private async Task<AuthResponse> IssueTokensAsync(User user)
     {
+        // TB-147: make sure the user's owned stores are loaded so the access token can carry
+        // the StoreIds claim. This is the single chokepoint for every flow (login, register,
+        // refresh-token, and the future register-seller), so loading here covers them all.
+        if (!_db.Entry(user).Collection(u => u.Stores).IsLoaded)
+            await _db.Entry(user).Collection(u => u.Stores).LoadAsync();
+
         var accessToken = _tokens.GenerateAccessToken(user);
         var refreshTokenValue = _tokens.GenerateRefreshToken();
 
