@@ -19,4 +19,4 @@ public class AdminDashboardController : ControllerBase
     [HttpGet("top-products")] public async Task<IActionResult> Top() => Ok(await _dash.GetTopProductsAsync(null));
     [HttpGet("new-customers")] public async Task<IActionResult> NewCustomers([FromQuery] string period = "month") => Ok(await _dash.GetNewCustomersAsync(period, null));
     [HttpGet("orders-by-status")] public async Task<IActionResult> ByStatus() => Ok(await _dash.GetOrdersByStatusAsync(null));
-}S
+}

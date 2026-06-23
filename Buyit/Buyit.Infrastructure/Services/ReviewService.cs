@@ -100,12 +100,13 @@ public class ReviewService : IReviewService
         if (!productExists)
             throw new NotFoundException($"Product with ID {productId} was not found.");
 
-        // PURCHASE VALIDATION (the headline rule):
-        // Is there an OrderItem for this product, inside a DELIVERED order owned by this user?
-        var hasReceived = await _context.OrderItems.AnyAsync(oi =>
-            oi.ProductId == productId &&
-            oi.Order.UserId == userId &&
-            oi.Order.Status == OrderStatus.Delivered);
+        // PURCHASE VALIDATION (the headline rule) — TB-130 marketplace update:
+        // Is there a StoreOrderItem for this product, inside a DELIVERED store-slice whose
+        // parent order belongs to this user? (Fulfilment status now lives on StoreOrder.)
+        var hasReceived = await _context.StoreOrderItems.AnyAsync(soi =>
+            soi.ProductId == productId &&
+            soi.StoreOrder.Order.UserId == userId &&
+            soi.StoreOrder.Status == OrderStatus.Delivered);
 
         if (!hasReceived)
             throw new ForbiddenException("You can only review products you have received");
