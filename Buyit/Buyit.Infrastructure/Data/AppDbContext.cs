@@ -20,7 +20,6 @@ namespace Buyit.Infrastructure.Data
         public DbSet<Cart> Carts => Set<Cart>();
         public DbSet<CartItem> CartItems => Set<CartItem>();
         public DbSet<Order> Orders => Set<Order>();
-        public DbSet<OrderItem> OrderItems => Set<OrderItem>();
         public DbSet<Payment> Payments => Set<Payment>();
         public DbSet<Review> Reviews => Set<Review>();
         public DbSet<Store> Stores => Set<Store>();
@@ -86,20 +85,6 @@ namespace Buyit.Infrastructure.Data
                 .HasOne(ci => ci.Product)
                 .WithMany(p => p.CartItems)
                 .HasForeignKey(ci => ci.ProductId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            // Order (1) -> OrderItems (N) : delete order -> delete its lines
-            modelBuilder.Entity<OrderItem>()
-                .HasOne(oi => oi.Order)
-                .WithMany(o => o.OrderItems)
-                .HasForeignKey(oi => oi.OrderId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // Product (1) -> OrderItems (N) : restrict (preserve order history)
-            modelBuilder.Entity<OrderItem>()
-                .HasOne(oi => oi.Product)
-                .WithMany(p => p.OrderItems)
-                .HasForeignKey(oi => oi.ProductId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             // Coupon (1) -> Carts (N) : optional (Cart.CouponId is nullable)
@@ -232,7 +217,6 @@ namespace Buyit.Infrastructure.Data
             // ========== DECIMAL PRECISION ==========
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.TotalAmount).HasPrecision(18, 2);
-            modelBuilder.Entity<OrderItem>().Property(oi => oi.UnitPrice).HasPrecision(18, 2);
             modelBuilder.Entity<Payment>().Property(p => p.Amount).HasPrecision(18, 2);
             modelBuilder.Entity<Coupon>().Property(c => c.DiscountPercentage).HasPrecision(5, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.SubTotal).HasPrecision(10, 2);

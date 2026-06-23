@@ -1,4 +1,4 @@
-﻿using Buyit.Application.DTOs;
+using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
@@ -18,7 +18,6 @@ namespace Buyit.Tests;
 
 public class OrderServiceTests
 {
-    // OrderService needs AppDbContext + mocked email service + mocked validators
     private static OrderService BuildSut(out AppDbContext db)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -28,13 +27,11 @@ public class OrderServiceTests
 
         db = new AppDbContext(options);
 
-        // Email service is fire-and-forget 
         var emailMock = new Mock<IEmailService>();
         emailMock.Setup(e => e.SendOrderConfirmationAsync(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<decimal>()))
             .Returns(Task.CompletedTask);
 
-        // Validators always pass
         var placeOrderValidatorMock = new Mock<IValidator<PlaceOrderRequest>>();
         placeOrderValidatorMock
             .Setup(v => v.ValidateAsync(It.IsAny<PlaceOrderRequest>(), default))
@@ -55,8 +52,8 @@ public class OrderServiceTests
             updateStatusValidatorMock.Object);
     }
 
-    // Seeds a user, product with inventory, and an empty cart
-    private static async Task<(int userId, Cart cart, Product product)> SeedOrderDataAsync(
+    // Seeds a buyer, a seller-owned approved store (10% commission), a product with stock, and an empty cart.
+    private static async Task<(int userId, Cart cart, Product product, int storeId)> SeedOrderDataAsync(
         AppDbContext db, int stock = 50)
     {
         var user = new User
@@ -69,8 +66,30 @@ public class OrderServiceTests
         };
         db.Users.Add(user);
 
+        var seller = new User
+        {
+            FirstName = "Seller",
+            LastName = "User",
+            Email = $"seller-{Guid.NewGuid()}@buyit.com",
+            PasswordHash = "irrelevant",
+            Role = UserRole.Seller
+        };
+        db.Users.Add(seller);
+        await db.SaveChangesAsync();
+
+        var store = new Store
+        {
+            OwnerUserId = seller.Id,
+            Name = "Test Store",
+            Slug = $"test-store-{Guid.NewGuid()}",
+            Status = StoreStatus.Approved,
+            CommissionRate = 0.10m
+        };
+        db.Stores.Add(store);
+
         var category = new Category { Name = "Electronics" };
         db.Categories.Add(category);
+        await db.SaveChangesAsync();
 
         var product = new Product
         {
@@ -79,20 +98,19 @@ public class OrderServiceTests
             Sku = $"LAP-{Guid.NewGuid()}",
             Price = 1200.00m,
             Category = category,
+            StoreId = store.Id,
             Inventory = new Inventory { QuantityInStock = stock, LowStockThreshold = 5 }
         };
         db.Products.Add(product);
-
         await db.SaveChangesAsync();
 
         var cart = new Cart { UserId = user.Id };
         db.Carts.Add(cart);
         await db.SaveChangesAsync();
 
-        return (user.Id, cart, product);
+        return (user.Id, cart, product, store.Id);
     }
 
-    // Shipping address
     private static PlaceOrderRequest ValidShippingRequest() => new(
         "verdun, abc mall street etc..",
         null,
@@ -101,136 +119,115 @@ public class OrderServiceTests
         "Lebanon"
     );
 
-    // TEST 5: Placing a valid order creates the order, deducts inventory, clears cart
     [Fact]
-    public async Task PlaceOrder_ValidCart_CreatesOrderAndDeductsInventory()
+    public async Task PlaceOrder_ValidCart_FansOutAndDeductsInventory()
     {
         var sut = BuildSut(out var db);
-        var (userId, cart, product) = await SeedOrderDataAsync(db, stock: 50);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
 
-        // Add item to cart
-        db.CartItems.Add(new CartItem
-        {
-            CartId = cart.Id,
-            ProductId = product.Id,
-            Quantity = 3
-        });
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 3 });
         await db.SaveChangesAsync();
 
         var result = await sut.PlaceOrderAsync(userId, ValidShippingRequest());
 
-        // Assert order created with correct total
         result.Should().NotBeNull();
-        result.TotalAmount.Should().Be(product.Price * 3);
+        result.TotalAmount.Should().Be(product.Price * 3);   // 3600, no coupon
         result.Status.Should().Be("Pending");
-        result.Items.Should().HaveCount(1);
+        result.StoreOrders.Should().HaveCount(1);            // single store -> one StoreOrder
+        result.StoreOrders.First().Items.Should().HaveCount(1);
 
-        // Assert inventory was decremented
         var inventory = await db.Inventories.FirstOrDefaultAsync(i => i.ProductId == product.Id);
-        inventory!.QuantityInStock.Should().Be(47); // 50 - 3
+        inventory!.QuantityInStock.Should().Be(47);          // 50 - 3
 
-        // Assert cart was cleared
         var cartItems = await db.CartItems.Where(ci => ci.CartId == cart.Id).ToListAsync();
         cartItems.Should().BeEmpty();
     }
 
-    // TEST 6: Placing an order with an empty cart throws ValidationException
+    [Fact]
+    public async Task PlaceOrder_ValidCart_ComputesCommissionAndNet()
+    {
+        var sut = BuildSut(out var db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
+
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 3 });
+        await db.SaveChangesAsync();
+
+        var result = await sut.PlaceOrderAsync(userId, ValidShippingRequest());
+
+        var storeOrder = result.StoreOrders.First();
+        storeOrder.SubTotal.Should().Be(3600.00m);            // 1200 * 3
+        storeOrder.CommissionAmount.Should().Be(360.00m);     // 10% of 3600
+        storeOrder.SellerNetAmount.Should().Be(3240.00m);     // 3600 - 360
+    }
+
     [Fact]
     public async Task PlaceOrder_EmptyCart_ThrowsValidationException()
     {
         var sut = BuildSut(out var db);
-        var (userId, _, _) = await SeedOrderDataAsync(db);
+        var (userId, _, _, _) = await SeedOrderDataAsync(db);
 
-        // Cart exists but has no items
-        Func<Task> act = async () =>
-            await sut.PlaceOrderAsync(userId, ValidShippingRequest());
+        Func<Task> act = async () => await sut.PlaceOrderAsync(userId, ValidShippingRequest());
 
         var exception = await act.Should().ThrowAsync<ValidationException>();
-        exception.Which.Errors.Values
-            .SelectMany(e => e)
+        exception.Which.Errors.Values.SelectMany(e => e)
             .Should().Contain(m => m.Contains("empty"));
     }
 
-    // TEST 7: Placing an order with out-of-stock item throws ValidationException with product name
     [Fact]
     public async Task PlaceOrder_ItemOutOfStock_ThrowsValidationException()
     {
         var sut = BuildSut(out var db);
-        var (userId, cart, product) = await SeedOrderDataAsync(db, stock: 1);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 1);
 
-        // Request more than available stock
-        db.CartItems.Add(new CartItem
-        {
-            CartId = cart.Id,
-            ProductId = product.Id,
-            Quantity = 10
-        });
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 10 });
         await db.SaveChangesAsync();
 
-        Func<Task> act = async () =>
-            await sut.PlaceOrderAsync(userId, ValidShippingRequest());
+        Func<Task> act = async () => await sut.PlaceOrderAsync(userId, ValidShippingRequest());
 
         var exception = await act.Should().ThrowAsync<ValidationException>();
-
-        // Assert exception message contains the product name
-        exception.Which.Errors.Values
-            .SelectMany(e => e)
+        exception.Which.Errors.Values.SelectMany(e => e)
             .Should().Contain(m => m.Contains("Laptop"));
     }
 
-    // TEST 8: Cancelling a Pending order sets status to Cancelled
     [Fact]
-    public async Task CancelOrder_PendingStatus_SetsStatusCancelled()
+    public async Task CancelStoreOrder_PendingStatus_SetsStatusCancelledAndRestocks()
     {
         var sut = BuildSut(out var db);
-        var (userId, _, _) = await SeedOrderDataAsync(db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
 
-        // Seed a pending order
-        var order = new Order
-        {
-            UserId = userId,
-            Status = OrderStatus.Pending,
-            TotalAmount = 100,
-            ShippingLine1 = "verdun, abc mall street etc..",
-            ShippingCity = "Beirut",
-            ShippingPostalCode = "1100",
-            ShippingCountry = "Lebanon"
-        };
-        db.Orders.Add(order);
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 3 });
         await db.SaveChangesAsync();
+        await sut.PlaceOrderAsync(userId, ValidShippingRequest());   // creates a Pending StoreOrder, stock -> 47
 
-        await sut.CancelOrderAsync(order.Id, userId);
+        var storeOrder = await db.StoreOrders.FirstAsync();
 
-        var updated = await db.Orders.FindAsync(order.Id);
+        await sut.CancelStoreOrderAsync(storeOrder.Id, userId, isAdmin: false);
+
+        var updated = await db.StoreOrders.FindAsync(storeOrder.Id);
         updated!.Status.Should().Be(OrderStatus.Cancelled);
+
+        var inventory = await db.Inventories.FirstAsync(i => i.ProductId == product.Id);
+        inventory.QuantityInStock.Should().Be(50);   // 47 restocked back to 50
     }
 
-    // TEST 9: Cancelling a non-Pending order throws ValidationException
     [Fact]
-    public async Task CancelOrder_NonPendingStatus_ThrowsValidationException()
+    public async Task CancelStoreOrder_NonPendingStatus_ThrowsValidationException()
     {
         var sut = BuildSut(out var db);
-        var (userId, _, _) = await SeedOrderDataAsync(db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
 
-        // Seed a confirmed order 
-        var order = new Order
-        {
-            UserId = userId,
-            Status = OrderStatus.Confirmed,
-            TotalAmount = 100,
-            ShippingLine1 = "verdun, abc mall street etc..",
-            ShippingCity = "Beirut",
-            ShippingPostalCode = "1100",
-            ShippingCountry = "Lebanon"
-        };
-        db.Orders.Add(order);
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 3 });
+        await db.SaveChangesAsync();
+        await sut.PlaceOrderAsync(userId, ValidShippingRequest());
+
+        var storeOrder = await db.StoreOrders.FirstAsync();
+        storeOrder.Status = OrderStatus.Confirmed;   // move it past Pending
         await db.SaveChangesAsync();
 
-        Func<Task> act = async () => await sut.CancelOrderAsync(order.Id, userId);
+        Func<Task> act = async () => await sut.CancelStoreOrderAsync(storeOrder.Id, userId, isAdmin: false);
 
         var exception = await act.Should().ThrowAsync<ValidationException>();
-        exception.Which.Errors.Values
-            .SelectMany(e => e)
+        exception.Which.Errors.Values.SelectMany(e => e)
             .Should().Contain(m => m.Contains("Confirmed"));
     }
 }

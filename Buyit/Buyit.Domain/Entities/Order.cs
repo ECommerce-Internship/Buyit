@@ -10,7 +10,8 @@ public class Order
 
     public DateTime OrderDate { get; set; } = DateTime.UtcNow;
 
-    public OrderStatus Status { get; set; } = OrderStatus.Pending;
+    // Fulfilment status now lives on each StoreOrder (per-seller). The parent order's
+    // status is a read-time roll-up derived from its StoreOrders.
 
     // Total captured at purchase time.
     public decimal TotalAmount { get; set; }
@@ -45,8 +46,6 @@ public class Order
     // Each order belongs to one user.
     public int UserId { get; set; }
     public User User { get; set; } = null!;
-
-    public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
 
     public ICollection<StoreOrder> StoreOrders { get; set; } = new List<StoreOrder>();
 

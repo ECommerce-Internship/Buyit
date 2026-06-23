@@ -18,9 +18,7 @@ public class OrderController : ControllerBase
         _orderService = orderService;
     }
 
-    // Extracts userId from the JWT "sub" claim
-    private int GetUserId() =>
-        int.Parse(User.FindFirstValue("sub")!);
+    private int GetUserId() => int.Parse(User.FindFirstValue("sub")!);
 
     // POST api/v1/orders
     [HttpPost]
@@ -32,9 +30,7 @@ public class OrderController : ControllerBase
 
     // GET api/v1/orders
     [HttpGet]
-    public async Task<IActionResult> GetMyOrders(
-        [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 10)
+    public async Task<IActionResult> GetMyOrders([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
     {
         var orders = await _orderService.GetMyOrdersAsync(GetUserId(), page, pageSize);
         return Ok(orders);
@@ -48,11 +44,12 @@ public class OrderController : ControllerBase
         return Ok(order);
     }
 
-    // PUT api/v1/orders/{id}/cancel
-    [HttpPut("{id:int}/cancel")]
-    public async Task<IActionResult> CancelOrder(int id)
+    // PUT api/v1/orders/store-orders/{storeOrderId}/cancel
+    // Cancels one store-slice of the buyer's order (restocks that store's inventory).
+    [HttpPut("store-orders/{storeOrderId:int}/cancel")]
+    public async Task<IActionResult> CancelStoreOrder(int storeOrderId)
     {
-        await _orderService.CancelOrderAsync(id, GetUserId());
+        await _orderService.CancelStoreOrderAsync(storeOrderId, GetUserId(), isAdmin: false);
         return NoContent();
     }
 }
@@ -90,11 +87,11 @@ public class AdminOrderController : ControllerBase
         return Ok(order);
     }
 
-    // PUT api/v1/admin/orders/{id}/status
-    [HttpPut("{id:int}/status")]
-    public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] UpdateOrderStatusRequest request)
+    // PUT api/v1/admin/orders/store-orders/{storeOrderId}/status
+    [HttpPut("store-orders/{storeOrderId:int}/status")]
+    public async Task<IActionResult> UpdateStoreOrderStatus(int storeOrderId, [FromBody] UpdateOrderStatusRequest request)
     {
-        var order = await _orderService.UpdateOrderStatusAsync(id, request);
+        var order = await _orderService.UpdateStoreOrderStatusAsync(storeOrderId, callerUserId: 0, isAdmin: true, request);
         return Ok(order);
     }
 }
