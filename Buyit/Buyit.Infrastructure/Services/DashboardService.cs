@@ -82,16 +82,24 @@ public class DashboardService : IDashboardService
         if (sellerUserId is not null)
             items = items.Where(i => i.StoreOrder.Store.OwnerUserId == sellerUserId);
 
-        var top = await items
+        // Group + aggregate in SQL into an ANONYMOUS type (EF can't translate a record
+        // constructor inside a GroupBy projection), then map to the DTO in memory.
+        var grouped = await items
             .GroupBy(i => new { i.ProductId, i.ProductNameSnapshot })
-            .Select(g => new TopProductResponse(
+            .Select(g => new
+            {
                 g.Key.ProductId,
                 g.Key.ProductNameSnapshot,
-                g.Sum(x => x.Quantity),
-                g.Sum(x => x.Subtotal)))
+                UnitsSold = g.Sum(x => x.Quantity),
+                Revenue = g.Sum(x => x.Subtotal)
+            })
             .OrderByDescending(t => t.UnitsSold)
             .Take(10)
             .ToListAsync();
+
+        var top = grouped
+            .Select(g => new TopProductResponse(g.ProductId, g.ProductNameSnapshot, g.UnitsSold, g.Revenue))
+            .ToList();
 
         await _cache.SetAsync(key, top, Ttl);
         return top;
