@@ -175,6 +175,13 @@ public class OrderService : IOrderService
 
             return await BuildOrderResponseAsync(order.Id);
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            // H1: another checkout changed an item's stock between our read and our write.
+            await transaction.RollbackAsync();
+            throw new ConflictException(
+                "The stock for one or more items changed while placing your order. Please try again.");
+        }
         catch
         {
             await transaction.RollbackAsync();
@@ -184,6 +191,8 @@ public class OrderService : IOrderService
 
     public async Task<PaginatedResult<OrderSummaryResponse>> GetMyOrdersAsync(int userId, int page, int pageSize)
     {
+        (page, pageSize) = NormalizePaging(page, pageSize);   // M2: clamp page size
+
         var query = _context.Orders
             .Where(o => o.UserId == userId)
             .OrderByDescending(o => o.OrderDate);
@@ -257,14 +266,26 @@ public class OrderService : IOrderService
     public async Task<PaginatedResult<OrderSummaryResponse>> GetAllOrdersAsync(
         int page, int pageSize, string? status, DateTime? from, DateTime? to)
     {
+        (page, pageSize) = NormalizePaging(page, pageSize);   // M2: clamp page size
+
         var query = _context.Orders.AsQueryable();
 
         if (from.HasValue) query = query.Where(o => o.OrderDate >= from.Value);
         if (to.HasValue) query = query.Where(o => o.OrderDate <= to.Value);
 
+        // M1: filter and page IN THE DATABASE (don't load the whole table). The status filter is
+        // pushed to SQL as "has at least one store-slice in that status" (the rolled-up status
+        // can't be computed in SQL, so this is the closest translatable predicate).
+        if (!string.IsNullOrEmpty(status) && Enum.TryParse<OrderStatus>(status, ignoreCase: true, out var parsed))
+            query = query.Where(o => o.StoreOrders.Any(so => so.Status == parsed));
+
         query = query.OrderByDescending(o => o.OrderDate);
 
+        var totalCount = await query.CountAsync();
+
         var rows = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(o => new
             {
                 o.Id,
@@ -277,17 +298,10 @@ public class OrderService : IOrderService
             })
             .ToListAsync();
 
-        // Roll up status in memory, then optionally filter by the requested rolled-up status.
-        var mapped = rows.Select(r => new OrderSummaryResponse(
+        // Roll up status for just this page (RollUpStatus is C#, not SQL-translatable).
+        var items = rows.Select(r => new OrderSummaryResponse(
             r.Id, r.OrderDate, RollUpStatus(r.Statuses), r.TotalAmount,
-            r.StoreOrderCount, r.ItemCount, r.PaymentStatus));
-
-        if (!string.IsNullOrEmpty(status))
-            mapped = mapped.Where(o => string.Equals(o.Status, status, StringComparison.OrdinalIgnoreCase));
-
-        var all = mapped.ToList();
-        var totalCount = all.Count;
-        var items = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            r.StoreOrderCount, r.ItemCount, r.PaymentStatus)).ToList();
 
         return new PaginatedResult<OrderSummaryResponse>
         {
@@ -298,6 +312,8 @@ public class OrderService : IOrderService
 
     public async Task<PaginatedResult<StoreOrderResponse>> GetMyStoreOrdersAsync(int sellerUserId, int page, int pageSize)
     {
+        (page, pageSize) = NormalizePaging(page, pageSize);   // M2: clamp page size
+
         var query = _context.StoreOrders
             .Where(so => so.Store.OwnerUserId == sellerUserId)
             .OrderByDescending(so => so.Order.OrderDate);
@@ -405,6 +421,11 @@ public class OrderService : IOrderService
             so.StoreOrderItems.Select(i => new StoreOrderItemResponse(
                 i.Id, i.ProductId, i.ProductNameSnapshot, i.UnitPrice, i.Quantity, i.Subtotal))))
     );
+
+    // M2: clamp paging so a caller can't request an unbounded page (resource-exhaustion DoS).
+    private const int MaxPageSize = 50;
+    private static (int page, int pageSize) NormalizePaging(int page, int pageSize)
+        => (Math.Max(1, page), Math.Clamp(pageSize < 1 ? 10 : pageSize, 1, MaxPageSize));
 
     // Derive one status for the parent order from its store-slices.
     private static string RollUpStatus(IEnumerable<OrderStatus> storeStatuses)

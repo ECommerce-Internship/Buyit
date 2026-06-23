@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
@@ -22,6 +23,9 @@ public class OrderController : ControllerBase
 
     // POST api/v1/orders
     [HttpPost]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> PlaceOrder([FromBody] PlaceOrderRequest request)
     {
         var order = await _orderService.PlaceOrderAsync(GetUserId(), request);
@@ -30,6 +34,7 @@ public class OrderController : ControllerBase
 
     // GET api/v1/orders
     [HttpGet]
+    [ProducesResponseType(typeof(PaginatedResult<OrderSummaryResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMyOrders([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
     {
         var orders = await _orderService.GetMyOrdersAsync(GetUserId(), page, pageSize);
@@ -38,6 +43,9 @@ public class OrderController : ControllerBase
 
     // GET api/v1/orders/{id}
     [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetOrderById(int id)
     {
         var order = await _orderService.GetOrderByIdAsync(id, GetUserId(), isAdmin: false);
@@ -47,6 +55,10 @@ public class OrderController : ControllerBase
     // PUT api/v1/orders/store-orders/{storeOrderId}/cancel
     // Cancels one store-slice of the buyer's order (restocks that store's inventory).
     [HttpPut("store-orders/{storeOrderId:int}/cancel")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CancelStoreOrder(int storeOrderId)
     {
         await _orderService.CancelStoreOrderAsync(storeOrderId, GetUserId(), isAdmin: false);
@@ -68,6 +80,7 @@ public class AdminOrderController : ControllerBase
 
     // GET api/v1/admin/orders
     [HttpGet]
+    [ProducesResponseType(typeof(PaginatedResult<OrderSummaryResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetAllOrders(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10,
@@ -81,6 +94,8 @@ public class AdminOrderController : ControllerBase
 
     // GET api/v1/admin/orders/{id}
     [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetOrderById(int id)
     {
         var order = await _orderService.GetOrderByIdAsync(id, userId: 0, isAdmin: true);
@@ -89,6 +104,9 @@ public class AdminOrderController : ControllerBase
 
     // PUT api/v1/admin/orders/store-orders/{storeOrderId}/status
     [HttpPut("store-orders/{storeOrderId:int}/status")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdateStoreOrderStatus(int storeOrderId, [FromBody] UpdateOrderStatusRequest request)
     {
         var order = await _orderService.UpdateStoreOrderStatusAsync(storeOrderId, callerUserId: 0, isAdmin: true, request);

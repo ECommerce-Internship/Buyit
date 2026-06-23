@@ -10,17 +10,19 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using Serilog;
+using Microsoft.Extensions.Logging;
 
 namespace Buyit.Infrastructure.Services
 {
     public class JwtTokenService : IJwtTokenService
     {
         private readonly JwtSettings _settings;
+        private readonly ILogger<JwtTokenService> _logger;
 
-        public JwtTokenService(IOptions<JwtSettings> options)
+        public JwtTokenService(IOptions<JwtSettings> options, ILogger<JwtTokenService> logger)
         {
             _settings = options.Value;
+            _logger = logger;
         }
 
         public string GenerateAccessToken(User user)
@@ -68,7 +70,7 @@ namespace Buyit.Infrastructure.Services
                 signingCredentials: signingCredentials);
             // 5. Serialize the token object into the compact "header.payload.signature" string
             var tokenHandler = new JwtSecurityTokenHandler();
-            Log.Information(
+            _logger.LogInformation(
             "Generated JWT access token for user {UserId} with role {Role}",
             user.Id,
             user.Role);

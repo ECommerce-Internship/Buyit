@@ -16,6 +16,12 @@ public class Inventory
     // Tracks when stock or threshold was last modified.
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
 
+    // Optimistic-concurrency token (H1). Configured as a rowversion in AppDbContext; Npgsql
+    // maps a uint rowversion to the system "xmin" column, so two concurrent stock updates that
+    // would oversell are detected (the loser throws DbUpdateConcurrencyException). No real
+    // column is added.
+    public uint Version { get; set; }
+
     // FK + a unique index (added in Step 3) guarantees the one-to-one link.
     public int ProductId { get; set; }
     public Product Product { get; set; } = null!;

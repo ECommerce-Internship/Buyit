@@ -1,7 +1,7 @@
 ﻿namespace Buyit.Application.DTOs;
 
 /// <summary>The safe public shape of a store.</summary>
-public class StoreResponse
+public record StoreResponse
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;

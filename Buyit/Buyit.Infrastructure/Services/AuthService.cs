@@ -126,7 +126,7 @@ public class AuthService : IAuthService
                     Description = request.StoreDescription,
                     Slug = slug,
                     Status = StoreStatus.Pending,
-                    CommissionRate = 0.15m,
+                    CommissionRate = Buyit.Domain.Constants.MarketplaceDefaults.CommissionRate,
                     CreatedAt = DateTime.UtcNow
                 }
             }

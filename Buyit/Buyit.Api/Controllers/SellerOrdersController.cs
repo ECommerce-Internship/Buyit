@@ -3,6 +3,7 @@ using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Exceptions;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -21,11 +22,18 @@ public class SellerOrdersController : ControllerBase
 
     /// <summary>List the StoreOrders belonging to the caller's stores.</summary>
     [HttpGet]
+    [ProducesResponseType(typeof(PaginatedResult<StoreOrderResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetMine([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
         => Ok(await _orders.GetMyStoreOrdersAsync(GetUserId(), page, pageSize));
 
     /// <summary>Update the status of one of the caller's StoreOrders.</summary>
     [HttpPut("{storeOrderId:int}/status")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdateStatus(int storeOrderId, [FromBody] UpdateOrderStatusRequest request)
         => Ok(await _orders.UpdateStoreOrderStatusAsync(storeOrderId, GetUserId(), isAdmin: false, request));
 

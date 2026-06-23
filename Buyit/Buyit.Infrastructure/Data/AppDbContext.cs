@@ -176,6 +176,13 @@ namespace Buyit.Infrastructure.Data
                 .HasForeignKey<Inventory>(i => i.ProductId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // CONCURRENCY (H1): use Postgres' system xmin column as a concurrency token on
+            // Inventory so two simultaneous checkouts can't both decrement the last unit
+            // (lost-update / oversell). The second writer's UPDATE matches 0 rows -> EF throws
+            // DbUpdateConcurrencyException, which OrderService maps to a 409. No real column is
+            // added; xmin already exists on every Postgres row.
+            modelBuilder.Entity<Inventory>().Property(i => i.Version).IsRowVersion();
+
             // Order (1) <-> (1) Payment : Payment is the dependent
             modelBuilder.Entity<Order>()
                 .HasOne(o => o.Payment)

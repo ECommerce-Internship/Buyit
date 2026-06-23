@@ -1,3 +1,4 @@
+using Buyit.Application.Validators;
 using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
@@ -19,7 +20,8 @@ public class StoreServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         db = new AppDbContext(options);
-        return new StoreService(db, new Mock<ILogger<StoreService>>().Object);
+        // Use the REAL validator so the length/required rules are exercised by these tests.
+        return new StoreService(db, new CreateStoreRequestValidator(), new Mock<ILogger<StoreService>>().Object);
     }
 
     [Fact]
@@ -69,14 +71,14 @@ public class StoreServiceTests
     }
 
     [Fact]
-    public async Task SuspendAndReject_SetSuspended()
+    public async Task Suspend_SetsSuspended_AndReject_SetsRejected()
     {
         var sut = BuildSut(out _);
         var a = await sut.CreateStoreForUserAsync(1, "A", null);
         var b = await sut.CreateStoreForUserAsync(1, "B", null);
 
         (await sut.SuspendAsync(a.Id)).Status.Should().Be("Suspended");
-        (await sut.RejectAsync(b.Id)).Status.Should().Be("Suspended");
+        (await sut.RejectAsync(b.Id)).Status.Should().Be("Rejected");
     }
 
     [Fact]

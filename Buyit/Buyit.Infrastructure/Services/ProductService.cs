@@ -164,42 +164,67 @@ public class ProductService : IProductService
     {
         // --- CACHE-ASIDE (read): individual product cached under "product:{id}". ---
         string cacheKey = $"product:{id}";
-        var cached = await _cache.GetAsync<ProductResponse>(cacheKey);
-        if (cached is not null)
-            return cached;   // HIT
-
-        _logger.LogInformation("Querying DATABASE for product {ProductId}", id);
-
-        // Project straight into the DTO; the global filter still hides soft-deleted rows.
-        var product = await _db.Products
-            .Where(p => p.Id == id)
-            .Select(p => new ProductResponse
-            {
-                Id = p.Id,
-                Name = p.Name,
-                Description = p.Description,
-                Sku = p.Sku,
-                Price = p.Price,
-                ImageUrl = p.ImageUrl,
-                CreatedAt = p.CreatedAt,
-                CategoryId = p.CategoryId,
-                CategoryName = p.Category.Name,
-                StoreId = p.StoreId,
-                StoreName = p.Store.Name,
-                StoreSlug = p.Store.Slug,
-                QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
-                ReviewCount = p.Reviews.Count
-            })
-            .FirstOrDefaultAsync();
-
-        // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
+        var product = await _cache.GetAsync<ProductResponse>(cacheKey);
         if (product is null)
-            throw new NotFoundException($"Product with id {id} was not found.");
-        // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
-        await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
+        {
+            _logger.LogInformation("Querying DATABASE for product {ProductId}", id);
+
+            // Project straight into the DTO; the global filter still hides soft-deleted rows.
+            product = await _db.Products
+                .Where(p => p.Id == id)
+                .Select(p => new ProductResponse
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    Description = p.Description,
+                    Sku = p.Sku,
+                    Price = p.Price,
+                    ImageUrl = p.ImageUrl,
+                    CreatedAt = p.CreatedAt,
+                    CategoryId = p.CategoryId,
+                    CategoryName = p.Category.Name,
+                    StoreId = p.StoreId,
+                    StoreName = p.Store.Name,
+                    StoreSlug = p.Store.Slug,
+                    QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
+                    AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                    ReviewCount = p.Reviews.Count
+                })
+                .FirstOrDefaultAsync();
+
+            // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
+            if (product is null)
+                throw new NotFoundException($"Product with id {id} was not found.");
+
+            // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
+            await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
+        }
+
+        // M3: a product whose store isn't Approved is hidden from the public (browsing rule),
+        // but the owning seller and admins may still fetch it (e.g. the create/update re-fetch).
+        await EnsureProductVisibleAsync(product.StoreId, id);
 
         return product;
+    }
+
+    // Throws 404 if the product's store isn't Approved AND the caller is neither an admin nor
+    // the store owner. Keeps non-approved stores out of public browsing while letting owners
+    // and admins (and the internal create/update re-fetch they trigger) see their own products.
+    private async Task EnsureProductVisibleAsync(int storeId, int productId)
+    {
+        var store = await _db.Stores
+            .Where(s => s.Id == storeId)
+            .Select(s => new { s.Status, s.OwnerUserId })
+            .FirstOrDefaultAsync();
+
+        if (store is null)
+            throw new NotFoundException($"Product with id {productId} was not found.");
+
+        if (store.Status == StoreStatus.Approved) return;
+        if (_currentUser.IsAdmin) return;
+        if (_currentUser.UserId == store.OwnerUserId) return;
+
+        throw new NotFoundException($"Product with id {productId} was not found.");
     }
     public async Task<PaginatedResult<ProductResponse>> GetByStoreSlugAsync(string slug, ProductQueryParameters query)
     {

@@ -76,6 +76,7 @@ builder.Services.AddScoped<IValidator<RegisterRequest>, RegisterRequestValidator
 // --- TB-123/124/125: Seller side (stores, seller registration, ownership) ---
 builder.Services.AddScoped<IStoreService, StoreService>();
 builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequestValidator>();
+builder.Services.AddScoped<IValidator<CreateStoreRequest>, CreateStoreRequestValidator>();
 builder.Services.AddHttpContextAccessor();   // lets CurrentUserService read the request's claims
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IValidator<CreateCategoryRequest>, CreateCategoryRequestValidator>();

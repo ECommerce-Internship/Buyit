@@ -5,5 +5,6 @@ public enum StoreStatus
 {
     Pending = 0,
     Approved = 1,
-    Suspended = 2
+    Suspended = 2,   // was Approved, turned off by an admin
+    Rejected = 3     // never approved; admin declined the application
 }

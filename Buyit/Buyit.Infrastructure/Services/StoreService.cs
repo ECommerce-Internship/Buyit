@@ -1,33 +1,46 @@
 ﻿using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
+using Buyit.Domain.Constants;
 using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Domain.Helpers;
 using Buyit.Infrastructure.Data;
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using ValidationException = Buyit.Domain.Exceptions.ValidationException;
 
 namespace Buyit.Infrastructure.Services;
 
 public class StoreService : IStoreService
 {
     private readonly AppDbContext _db;
+    private readonly IValidator<CreateStoreRequest> _createStoreValidator;
     private readonly ILogger<StoreService> _logger;
 
-    public StoreService(AppDbContext db, ILogger<StoreService> logger)
+    public StoreService(
+        AppDbContext db,
+        IValidator<CreateStoreRequest> createStoreValidator,
+        ILogger<StoreService> logger)
     {
         _db = db;
+        _createStoreValidator = createStoreValidator;
         _logger = logger;
     }
 
     public async Task<StoreResponse> CreateStoreForUserAsync(int ownerUserId, string name, string? description)
     {
-        if (string.IsNullOrWhiteSpace(name))
-            throw new ValidationException(new Dictionary<string, string[]>
-            {
-                ["storeName"] = new[] { "Store name is required." }
-            });
+        // M4: validate via FluentValidation (length + required) -> 400, not a DB 500.
+        var validation = await _createStoreValidator.ValidateAsync(
+            new CreateStoreRequest { StoreName = name, StoreDescription = description });
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
 
         var slug = await GenerateUniqueSlugAsync(name);
 
@@ -37,16 +50,29 @@ public class StoreService : IStoreService
             Name = name.Trim(),
             Description = description,
             Slug = slug,
-            Status = StoreStatus.Pending,   // every new store starts Pending
-            CommissionRate = 0.15m,         // default platform cut; admins can tune later
+            Status = StoreStatus.Pending,            // every new store starts Pending
+            CommissionRate = MarketplaceDefaults.CommissionRate,
             CreatedAt = DateTime.UtcNow
         };
         _db.Stores.Add(store);
-        await _db.SaveChangesAsync();
+
+        // L3: the slug check-then-insert can race; the unique index is the backstop. Map the
+        // Postgres unique-violation (23505) to a clean 409 instead of leaking a 500.
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            throw new ConflictException("A store with a conflicting slug already exists. Please try again.");
+        }
 
         _logger.LogInformation("Created store {StoreId} ({Slug}) for user {UserId}", store.Id, store.Slug, ownerUserId);
         return Map(store);
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is Npgsql.PostgresException { SqlState: "23505" };
 
     public async Task<IReadOnlyList<StoreResponse>> GetPendingStoresAsync()
     {
@@ -60,7 +86,7 @@ public class StoreService : IStoreService
 
     public Task<StoreResponse> ApproveAsync(int id) => SetStatusAsync(id, StoreStatus.Approved);
     public Task<StoreResponse> SuspendAsync(int id) => SetStatusAsync(id, StoreStatus.Suspended);
-    public Task<StoreResponse> RejectAsync(int id) => SetStatusAsync(id, StoreStatus.Suspended); // reject == keep out of sale
+    public Task<StoreResponse> RejectAsync(int id) => SetStatusAsync(id, StoreStatus.Rejected);
 
     public async Task<StoreResponse> GetBySlugAsync(string slug)
     {
