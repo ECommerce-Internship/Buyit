@@ -29,8 +29,6 @@ public class ProductResponse
     // Computed: the mean of all this product's review ratings (0 if no reviews yet).
     public double AverageRating { get; set; }
 
-
+    // Computed: how many reviews this product has (0 if none yet).
+    public int ReviewCount { get; set; }
 }
-
-
-

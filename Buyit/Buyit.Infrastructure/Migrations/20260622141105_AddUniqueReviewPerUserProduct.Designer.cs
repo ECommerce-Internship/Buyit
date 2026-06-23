@@ -3,6 +3,7 @@ using System;
 using Buyit.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Buyit.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260622141105_AddUniqueReviewPerUserProduct")]
+    partial class AddUniqueReviewPerUserProduct
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -125,15 +128,10 @@ namespace Buyit.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
-                    b.Property<int?>("StoreId")
-                        .HasColumnType("integer");
-
                     b.HasKey("Id");
 
                     b.HasIndex("Code")
                         .IsUnique();
-
-                    b.HasIndex("StoreId");
 
                     b.ToTable("Coupons");
                 });
@@ -174,13 +172,6 @@ namespace Buyit.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<int?>("CouponId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("DiscountAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<DateTime>("OrderDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -208,6 +199,9 @@ namespace Buyit.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
                     b.Property<decimal>("TotalAmount")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
@@ -217,11 +211,39 @@ namespace Buyit.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CouponId");
-
                     b.HasIndex("UserId");
 
                     b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("Buyit.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("ProductId");
+
+                    b.ToTable("OrderItems");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.Payment", b =>
@@ -299,14 +321,11 @@ namespace Buyit.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
-                    b.Property<int>("StoreId")
-                        .HasColumnType("integer");
-
                     b.HasKey("Id");
 
                     b.HasIndex("CategoryId");
 
-                    b.HasIndex("StoreId", "Sku")
+                    b.HasIndex("Sku")
                         .IsUnique();
 
                     b.ToTable("Products");
@@ -382,127 +401,6 @@ namespace Buyit.Infrastructure.Migrations
                         {
                             t.HasCheckConstraint("CK_Review_Rating", "\"Rating\" BETWEEN 1 AND 5");
                         });
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.Store", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("CommissionRate")
-                        .HasPrecision(5, 4)
-                        .HasColumnType("numeric(5,4)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("character varying(150)");
-
-                    b.Property<int>("OwnerUserId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Slug")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("character varying(160)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OwnerUserId");
-
-                    b.HasIndex("Slug")
-                        .IsUnique();
-
-                    b.ToTable("Stores");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.StoreOrder", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("CommissionAmount")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.Property<int>("OrderId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SellerNetAmount")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("StoreId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SubTotal")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OrderId");
-
-                    b.HasIndex("StoreId");
-
-                    b.ToTable("StoreOrders");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.StoreOrderItem", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("ProductId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ProductNameSnapshot")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Quantity")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("StoreOrderId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("Subtotal")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("UnitPrice")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ProductId");
-
-                    b.HasIndex("StoreOrderId");
-
-                    b.ToTable("StoreOrderItems");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.User", b =>
@@ -631,16 +529,6 @@ namespace Buyit.Infrastructure.Migrations
                     b.Navigation("ParentCategory");
                 });
 
-            modelBuilder.Entity("Buyit.Domain.Entities.Coupon", b =>
-                {
-                    b.HasOne("Buyit.Domain.Entities.Store", "Store")
-                        .WithMany()
-                        .HasForeignKey("StoreId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("Store");
-                });
-
             modelBuilder.Entity("Buyit.Domain.Entities.Inventory", b =>
                 {
                     b.HasOne("Buyit.Domain.Entities.Product", "Product")
@@ -654,20 +542,32 @@ namespace Buyit.Infrastructure.Migrations
 
             modelBuilder.Entity("Buyit.Domain.Entities.Order", b =>
                 {
-                    b.HasOne("Buyit.Domain.Entities.Coupon", "Coupon")
-                        .WithMany()
-                        .HasForeignKey("CouponId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("Buyit.Domain.Entities.User", "User")
                         .WithMany("Orders")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("Coupon");
-
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Buyit.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("Buyit.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Buyit.Domain.Entities.Product", "Product")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Order");
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.Payment", b =>
@@ -689,15 +589,7 @@ namespace Buyit.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("Buyit.Domain.Entities.Store", "Store")
-                        .WithMany("Products")
-                        .HasForeignKey("StoreId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
                     b.Navigation("Category");
-
-                    b.Navigation("Store");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.RefreshToken", b =>
@@ -730,55 +622,6 @@ namespace Buyit.Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("Buyit.Domain.Entities.Store", b =>
-                {
-                    b.HasOne("Buyit.Domain.Entities.User", "Owner")
-                        .WithMany("Stores")
-                        .HasForeignKey("OwnerUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Owner");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.StoreOrder", b =>
-                {
-                    b.HasOne("Buyit.Domain.Entities.Order", "Order")
-                        .WithMany("StoreOrders")
-                        .HasForeignKey("OrderId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Buyit.Domain.Entities.Store", "Store")
-                        .WithMany("StoreOrders")
-                        .HasForeignKey("StoreId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Order");
-
-                    b.Navigation("Store");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.StoreOrderItem", b =>
-                {
-                    b.HasOne("Buyit.Domain.Entities.Product", "Product")
-                        .WithMany()
-                        .HasForeignKey("ProductId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Buyit.Domain.Entities.StoreOrder", "StoreOrder")
-                        .WithMany("StoreOrderItems")
-                        .HasForeignKey("StoreOrderId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Product");
-
-                    b.Navigation("StoreOrder");
-                });
-
             modelBuilder.Entity("Buyit.Domain.Entities.UserExternalLogin", b =>
                 {
                     b.HasOne("Buyit.Domain.Entities.User", "User")
@@ -809,9 +652,9 @@ namespace Buyit.Infrastructure.Migrations
 
             modelBuilder.Entity("Buyit.Domain.Entities.Order", b =>
                 {
-                    b.Navigation("Payment");
+                    b.Navigation("OrderItems");
 
-                    b.Navigation("StoreOrders");
+                    b.Navigation("Payment");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.Product", b =>
@@ -820,19 +663,9 @@ namespace Buyit.Infrastructure.Migrations
 
                     b.Navigation("Inventory");
 
+                    b.Navigation("OrderItems");
+
                     b.Navigation("Reviews");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.Store", b =>
-                {
-                    b.Navigation("Products");
-
-                    b.Navigation("StoreOrders");
-                });
-
-            modelBuilder.Entity("Buyit.Domain.Entities.StoreOrder", b =>
-                {
-                    b.Navigation("StoreOrderItems");
                 });
 
             modelBuilder.Entity("Buyit.Domain.Entities.User", b =>
@@ -846,8 +679,6 @@ namespace Buyit.Infrastructure.Migrations
                     b.Navigation("RefreshTokens");
 
                     b.Navigation("Reviews");
-
-                    b.Navigation("Stores");
                 });
 #pragma warning restore 612, 618
         }
