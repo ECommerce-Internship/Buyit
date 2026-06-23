@@ -142,4 +142,17 @@ public class ProductController : ControllerBase
         await _products.RemoveProductImageAsync(id);
         return NoContent();
     }
+
+    // Download products Excel from SFTP and import it, for Admin only 
+    [HttpPost("import-from-sftp")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(ImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<ImportResultDto>> ImportFromSftp(
+        [FromServices] ISftpImportService sftpImportService)
+    {
+        var result = await sftpImportService.ImportFromSftpAsync();
+        return Ok(result);
+    }
 }

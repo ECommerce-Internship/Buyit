@@ -86,6 +86,8 @@ builder.Services.AddScoped<IValidator<UpdateOrderStatusRequest>, UpdateOrderStat
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.Configure<SftpSettings>(builder.Configuration.GetSection("Sftp"));
+builder.Services.AddScoped<ISftpImportService, SftpImportService>();
 // --- TB-32: Product feature registrations ---
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
