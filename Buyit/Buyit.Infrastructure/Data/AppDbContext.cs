@@ -20,9 +20,11 @@ namespace Buyit.Infrastructure.Data
         public DbSet<Cart> Carts => Set<Cart>();
         public DbSet<CartItem> CartItems => Set<CartItem>();
         public DbSet<Order> Orders => Set<Order>();
-        public DbSet<OrderItem> OrderItems => Set<OrderItem>();
         public DbSet<Payment> Payments => Set<Payment>();
         public DbSet<Review> Reviews => Set<Review>();
+        public DbSet<Store> Stores => Set<Store>();
+        public DbSet<StoreOrder> StoreOrders => Set<StoreOrder>();
+        public DbSet<StoreOrderItem> StoreOrderItems => Set<StoreOrderItem>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -85,25 +87,67 @@ namespace Buyit.Infrastructure.Data
                 .HasForeignKey(ci => ci.ProductId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Order (1) -> OrderItems (N) : delete order -> delete its lines
-            modelBuilder.Entity<OrderItem>()
-                .HasOne(oi => oi.Order)
-                .WithMany(o => o.OrderItems)
-                .HasForeignKey(oi => oi.OrderId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // Product (1) -> OrderItems (N) : restrict (preserve order history)
-            modelBuilder.Entity<OrderItem>()
-                .HasOne(oi => oi.Product)
-                .WithMany(p => p.OrderItems)
-                .HasForeignKey(oi => oi.ProductId)
-                .OnDelete(DeleteBehavior.Restrict);
-
             // Coupon (1) -> Carts (N) : optional (Cart.CouponId is nullable)
             modelBuilder.Entity<Cart>()
                 .HasOne(c => c.Coupon)
                 .WithMany(co => co.Carts)
                 .HasForeignKey(c => c.CouponId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // User (1) -> Stores (N) : keep stores if the owner row is restricted from deletion
+            modelBuilder.Entity<Store>()
+                .HasOne(s => s.Owner)
+                .WithMany(u => u.Stores)
+                .HasForeignKey(s => s.OwnerUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Store (1) -> Products (N) : restrict so a store can't be deleted out from under products
+            modelBuilder.Entity<Product>()
+                .HasOne(p => p.Store)
+                .WithMany(s => s.Products)
+                .HasForeignKey(p => p.StoreId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Store (1) -> StoreOrders (N) : restrict to preserve sales history
+            modelBuilder.Entity<StoreOrder>()
+                .HasOne(so => so.Store)
+                .WithMany(s => s.StoreOrders)
+                .HasForeignKey(so => so.StoreId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Order (1) -> StoreOrders (N) : cascade — a store-slice is owned by its parent order
+            modelBuilder.Entity<StoreOrder>()
+                .HasOne(so => so.Order)
+                .WithMany(o => o.StoreOrders)
+                .HasForeignKey(so => so.OrderId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // StoreOrder (1) -> StoreOrderItems (N) : cascade — lines are owned by their store-slice
+            modelBuilder.Entity<StoreOrderItem>()
+                .HasOne(soi => soi.StoreOrder)
+                .WithMany(so => so.StoreOrderItems)
+                .HasForeignKey(soi => soi.StoreOrderId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Product (1) -> StoreOrderItems (N) : restrict to preserve order history
+            modelBuilder.Entity<StoreOrderItem>()
+                .HasOne(soi => soi.Product)
+                .WithMany()
+                .HasForeignKey(soi => soi.ProductId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Coupon (1) -> Stores ... actually Store (optional) on Coupon: a coupon may target one store
+            modelBuilder.Entity<Coupon>()
+                .HasOne(c => c.Store)
+                .WithMany()
+                .HasForeignKey(c => c.StoreId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Order (1) -> Coupon (optional) : the coupon used on this order, if any
+            modelBuilder.Entity<Order>()
+                .HasOne(o => o.Coupon)
+                .WithMany()
+                .HasForeignKey(o => o.CouponId)
                 .OnDelete(DeleteBehavior.Restrict);
 
 
@@ -132,6 +176,13 @@ namespace Buyit.Infrastructure.Data
                 .HasForeignKey<Inventory>(i => i.ProductId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // CONCURRENCY (H1): use Postgres' system xmin column as a concurrency token on
+            // Inventory so two simultaneous checkouts can't both decrement the last unit
+            // (lost-update / oversell). The second writer's UPDATE matches 0 rows -> EF throws
+            // DbUpdateConcurrencyException, which OrderService maps to a 409. No real column is
+            // added; xmin already exists on every Postgres row.
+            modelBuilder.Entity<Inventory>().Property(i => i.Version).IsRowVersion();
+
             // Order (1) <-> (1) Payment : Payment is the dependent
             modelBuilder.Entity<Order>()
                 .HasOne(o => o.Payment)
@@ -140,8 +191,23 @@ namespace Buyit.Infrastructure.Data
                 .OnDelete(DeleteBehavior.Cascade);
 
             // ========== UNIQUE CONSTRAINTS (alternate keys) ==========
+            
             modelBuilder.Entity<User>().HasIndex(u => u.Email).IsUnique();
-            modelBuilder.Entity<Product>().HasIndex(p => p.Sku).IsUnique();
+            // SKU is unique PER STORE, not globally: two stores may reuse the same SKU,
+            // but one store cannot list the same SKU twice. (Composite unique index.)
+            modelBuilder.Entity<Product>()
+                .HasIndex(p => new { p.StoreId, p.Sku })
+                .IsUnique();
+
+            // Store slugs appear in public URLs, so they must be globally unique.
+            modelBuilder.Entity<Store>()
+                .HasIndex(s => s.Slug)
+                .IsUnique();
+
+            // Coupons are frequently filtered by store; index (non-unique) speeds that up.
+            modelBuilder.Entity<Coupon>()
+                .HasIndex(c => c.StoreId);
+            
             modelBuilder.Entity<Coupon>().HasIndex(c => c.Code).IsUnique();
 
             // Refresh tokens are looked up by their value on every session refresh.
@@ -165,9 +231,15 @@ namespace Buyit.Infrastructure.Data
             // ========== DECIMAL PRECISION ==========
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.TotalAmount).HasPrecision(18, 2);
-            modelBuilder.Entity<OrderItem>().Property(oi => oi.UnitPrice).HasPrecision(18, 2);
             modelBuilder.Entity<Payment>().Property(p => p.Amount).HasPrecision(18, 2);
             modelBuilder.Entity<Coupon>().Property(c => c.DiscountPercentage).HasPrecision(5, 2);
+            modelBuilder.Entity<StoreOrder>().Property(so => so.SubTotal).HasPrecision(10, 2);
+            modelBuilder.Entity<StoreOrder>().Property(so => so.CommissionAmount).HasPrecision(10, 2);
+            modelBuilder.Entity<StoreOrder>().Property(so => so.SellerNetAmount).HasPrecision(10, 2);
+            modelBuilder.Entity<Store>().Property(s => s.CommissionRate).HasPrecision(5, 4);
+            modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.UnitPrice).HasPrecision(18, 2);
+            modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.Subtotal).HasPrecision(18, 2);
+            modelBuilder.Entity<Order>().Property(o => o.DiscountAmount).HasPrecision(18, 2);
 
             // ========== CHECK CONSTRAINT ==========
             modelBuilder.Entity<Review>()

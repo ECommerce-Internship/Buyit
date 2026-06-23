@@ -73,6 +73,12 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IExternalAuthService, ExternalAuthService>();
 builder.Services.AddScoped<IValidator<RegisterRequest>, RegisterRequestValidator>();
+// --- TB-123/124/125: Seller side (stores, seller registration, ownership) ---
+builder.Services.AddScoped<IStoreService, StoreService>();
+builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequestValidator>();
+builder.Services.AddScoped<IValidator<CreateStoreRequest>, CreateStoreRequestValidator>();
+builder.Services.AddHttpContextAccessor();   // lets CurrentUserService read the request's claims
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IValidator<CreateCategoryRequest>, CreateCategoryRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequestValidator>();
 // TB-76: lets the Google auth controller make a server-to-server call to Google's token endpoint
@@ -113,6 +119,7 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;

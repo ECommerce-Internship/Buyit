@@ -57,31 +57,56 @@ public class ReviewServiceTests
         db.Users.Add(user);
 
         var category = new Category { Name = "Electronics" };
+        var store = new Store
+        {
+            OwnerUserId = user.Id,
+            Name = "Rev Store",
+            Slug = $"rev-store-{Guid.NewGuid()}",
+            Status = StoreStatus.Approved,
+            CommissionRate = 0m
+        };
         var product = new Product
         {
             Name = "Headphones",
             Description = "Noise-cancelling",
             Sku = $"HP-{Guid.NewGuid()}",
             Price = 199.99m,
-            Category = category
+            Category = category,
+            Store = store
         };
         db.Products.Add(product);
         await db.SaveChangesAsync();
 
         if (delivered)
         {
+            // A DELIVERED store-slice owned by this buyer (fulfilment status lives on StoreOrder).
             var order = new Order
             {
                 UserId = user.Id,
-                Status = OrderStatus.Delivered,
                 TotalAmount = 199.99m,
                 ShippingLine1 = "1 Test St",
                 ShippingCity = "Testville",
                 ShippingPostalCode = "0000",
                 ShippingCountry = "Testland",
-                OrderItems = new List<OrderItem>
+                StoreOrders = new List<StoreOrder>
                 {
-                    new() { ProductId = product.Id, Quantity = 1, UnitPrice = 199.99m }
+                    new()
+                    {
+                        StoreId = store.Id,
+                        Status = OrderStatus.Delivered,
+                        SubTotal = 199.99m,
+                        StoreOrderItems = new List<StoreOrderItem>
+                        {
+                            new()
+                            {
+                                ProductId = product.Id,
+                                Quantity = 1,
+                                UnitPrice = 199.99m,
+                                ProductNameSnapshot = product.Name,
+                                Subtotal = 199.99m
+                            }
+                        }
+                    }
                 }
             };
             db.Orders.Add(order);

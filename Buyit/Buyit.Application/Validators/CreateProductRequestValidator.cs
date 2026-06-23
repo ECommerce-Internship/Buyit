@@ -25,6 +25,9 @@ public class CreateProductRequestValidator : AbstractValidator<CreateProductRequ
         RuleFor(x => x.CategoryId)
             .GreaterThan(0).WithMessage("A valid category id is required.");
 
+        RuleFor(x => x.StoreId)
+            .GreaterThan(0).WithMessage("A valid StoreId is required.");
+
         RuleFor(x => x.InitialStock)
             .GreaterThanOrEqualTo(0).WithMessage("Initial stock cannot be negative.");
 

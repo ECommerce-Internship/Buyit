@@ -35,10 +35,14 @@ public class Product
     public int CategoryId { get; set; }
     public Category Category { get; set; } = null!;
 
+    // Each product belongs to exactly one store (1:N). Backfilled to the Platform Store
+    // for legacy rows in TB-122, which is what lets this be NOT NULL.
+    public int StoreId { get; set; }
+    public Store Store { get; set; } = null!;
+
     // One-to-one: each product has exactly one inventory record.
     public Inventory? Inventory { get; set; }
 
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
     public ICollection<CartItem> CartItems { get; set; } = new List<CartItem>();
-    public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
 }

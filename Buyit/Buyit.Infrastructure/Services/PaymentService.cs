@@ -133,6 +133,7 @@ public class PaymentService : IPaymentService
     {
         var payment = await _context.Payments
             .Include(p => p.Order)
+                .ThenInclude(o => o.StoreOrders)
             .FirstOrDefaultAsync(p => p.Id == paymentId);
 
         if (payment == null)
@@ -142,7 +143,9 @@ public class PaymentService : IPaymentService
             throw new ConflictException($"Only paid payments can be refunded. Current status: {payment.Status}.");
 
         payment.Status = PaymentStatus.Refunded;
-        payment.Order.Status = OrderStatus.Cancelled;
+        // Marketplace: a refund cancels every store-slice of the order.
+        foreach (var so in payment.Order.StoreOrders)
+            so.Status = OrderStatus.Cancelled;
 
         await _context.SaveChangesAsync();
 

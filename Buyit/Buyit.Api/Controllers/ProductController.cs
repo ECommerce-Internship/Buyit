@@ -40,8 +40,9 @@ public class ProductController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Create a new product (and its inventory record).</summary>
+    /// <summary>Create a new product (and its inventory record). Seller (own store) or Admin.</summary>
     [HttpPost]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(ProductResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -52,8 +53,9 @@ public class ProductController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = result.Id, version = "1.0" }, result);
     }
 
-    /// <summary>Update an existing product.</summary>
+    /// <summary>Update an existing product. Seller (own store) or Admin.</summary>
     [HttpPut("{id:int}")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(ProductResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -63,8 +65,9 @@ public class ProductController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Soft-delete a product. Returns 204 No Content.</summary>
+    /// <summary>Soft-delete a product. Returns 204 No Content. Seller (own store) or Admin.</summary>
     [HttpDelete("{id:int}")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id)
@@ -107,7 +110,7 @@ public class ProductController : ControllerBase
 
     /// <summary>Upload (or replace) a product's image. Admin only. multipart/form-data.</summary>
     [HttpPost("{id:int}/image")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -135,7 +138,7 @@ public class ProductController : ControllerBase
 
     /// <summary>Remove a product's image. Admin only.</summary>
     [HttpDelete("{id:int}/image")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteImage(int id)
