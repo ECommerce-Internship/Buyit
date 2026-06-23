@@ -39,8 +39,8 @@ namespace Buyit.Api.Middleware
                 ForbiddenException => HttpStatusCode.Forbidden,        // this is for 403
                 NotFoundException => HttpStatusCode.NotFound,          // this is for 404
                 ConflictException => HttpStatusCode.Conflict,          // this is for 409
-                SftpConnectionException => HttpStatusCode.BadGateway,
-                SftpFileNotFoundException => HttpStatusCode.NotFound,
+                SftpConnectionException => HttpStatusCode.BadGateway,  // this is for 502
+                SftpFileNotFoundException => HttpStatusCode.NotFound,  // this is for 404
                 _ => HttpStatusCode.InternalServerError                // this is for 500
             };
 
