@@ -1,3 +1,6 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
+using Azure.Storage.Blobs;
 using Buyit.Api.Extensions;
 using Buyit.Api.Middleware;
 using Buyit.Application.Common;
@@ -6,6 +9,7 @@ using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
+using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -13,9 +17,7 @@ using Microsoft.IdentityModel.Tokens;
 using OfficeOpenXml;
 using Serilog;
 using StackExchange.Redis;
-using System.IdentityModel.Tokens.Jwt;
-using System.Text;
-using Azure.Storage.Blobs;
+
 
 // Bootstrap logger — captures startup errors before the host config is loaded
 Log.Logger = new LoggerConfiguration()
@@ -88,7 +90,12 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 // --- TB-40: Payment feature registrations ---
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequestValidator>();
-builder.Services.AddScoped<IEmailService, EmailService>();
+// Register SendGridEmailService if API key is configured, otherwise fall back to placeholder
+var sendGridApiKey = builder.Configuration["SendGrid:ApiKey"];
+if (!string.IsNullOrWhiteSpace(sendGridApiKey))
+    builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+else
+    builder.Services.AddScoped<IEmailService, EmailService>();
 // --- TB-32: Product feature registrations ---
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
@@ -96,6 +103,12 @@ builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductReques
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+
+// --- TB-43: Azure Queue + SendGrid registrations ---
+builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
+builder.Services.Configure<SendGridSettings>(builder.Configuration.GetSection("SendGrid"));
+builder.Services.AddHostedService<LowStockWorker>();
+
 // --- TB-46: Gemini AI product-content feature registrations ---
 builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
 

@@ -2,6 +2,6 @@ namespace Buyit.Application.Interfaces;
 
 public interface ILowStockAlertService
 {
-    // Full implementation wired in the Azure epic
-    Task TriggerAlertAsync(int productId, string productName, int quantity);
+    // Serializes the low stock message and sends it to the Azure Queue
+    Task TriggerAlertAsync(int productId, string productName, int quantity, int threshold);
 }
