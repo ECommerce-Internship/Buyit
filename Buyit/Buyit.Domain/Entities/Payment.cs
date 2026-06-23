@@ -12,6 +12,8 @@ public class Payment
     public PaymentMethod Method { get; set; }
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
 
+    public string? TransactionId { get; set; }
+
     // Set once the payment succeeds; null while pending/failed.
     public DateTime? PaidAt { get; set; }
 

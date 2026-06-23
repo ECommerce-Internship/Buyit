@@ -39,6 +39,7 @@ namespace Buyit.Api.Middleware
                 ForbiddenException => HttpStatusCode.Forbidden,        // this is for 403
                 NotFoundException => HttpStatusCode.NotFound,          // this is for 404
                 ConflictException => HttpStatusCode.Conflict,          // this is for 409
+                ExternalServiceException => HttpStatusCode.BadGateway,  // this is for 502
                 SftpConnectionException => HttpStatusCode.BadGateway,  // this is for 502
                 SftpFileNotFoundException => HttpStatusCode.NotFound,  // this is for 404
                 _ => HttpStatusCode.InternalServerError                // this is for 500
@@ -61,6 +62,7 @@ namespace Buyit.Api.Middleware
                     HttpStatusCode.Forbidden => "Forbidden",
                     HttpStatusCode.NotFound => "Not Found",
                     HttpStatusCode.Conflict => "Conflict",
+                    HttpStatusCode.BadGateway => "Bad Gateway",
                     _ => "Internal Server Error"
                 },
                 Detail = statusCode == HttpStatusCode.InternalServerError
