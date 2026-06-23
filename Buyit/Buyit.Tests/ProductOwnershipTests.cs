@@ -36,10 +36,16 @@ public class ProductOwnershipTests
         current.Setup(c => c.IsAdmin).Returns(isAdmin);
         current.Setup(c => c.UserId).Returns(callerUserId);
 
+        // TB-47: not exercised by ownership tests, but required by the ProductService constructor.
+        var gemini = new Mock<IGeminiService>();
+        var generateContentV = new Mock<IValidator<GenerateContentRequest>>();
+        generateContentV.Setup(v => v.ValidateAsync(It.IsAny<GenerateContentRequest>(), default)).ReturnsAsync(new ValidationResult());
+
         return new ProductService(
             db, createV.Object, updateV.Object,
             new Mock<ICacheService>().Object, new Mock<IBlobStorageService>().Object,
-            current.Object, new Mock<ILogger<ProductService>>().Object);
+            current.Object, gemini.Object, generateContentV.Object,
+            new Mock<ILogger<ProductService>>().Object);
     }
 
     // Seeds a category and two stores (owners A and B), each with one product.

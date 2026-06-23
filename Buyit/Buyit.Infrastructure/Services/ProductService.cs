@@ -26,6 +26,8 @@ public class ProductService : IProductService
     private readonly IBlobStorageService _blob;   // TB-42: uploads/deletes product images
     private readonly ICurrentUserService _currentUser;   // TB-125: ownership checks
     private readonly ILogger<ProductService> _logger;
+    private readonly IGeminiService _gemini;                              // TB-47: AI content generator
+    private readonly IValidator<GenerateContentRequest> _generateContentValidator;  // TB-47
 
     public ProductService(
      AppDbContext db,
@@ -34,6 +36,8 @@ public class ProductService : IProductService
      ICacheService cache,
      IBlobStorageService blob,            // <-- new (TB-42)
      ICurrentUserService currentUser,     // <-- new (TB-125)
+     IGeminiService gemini,                                          // <-- new (TB-47)
+     IValidator<GenerateContentRequest> generateContentValidator,    // <-- new (TB-47)
      ILogger<ProductService> logger)
     {
         _db = db;
@@ -43,6 +47,8 @@ public class ProductService : IProductService
         _blob = blob;                        // <-- new (TB-42)
         _currentUser = currentUser;          // <-- new (TB-125)
         _logger = logger;
+        _gemini = gemini;                                           // <-- new (TB-47)
+        _generateContentValidator = generateContentValidator;      // <-- new (TB-47)
     }
 
     // TB-125: throws 403 unless the caller is an admin or owns the given store.
@@ -381,6 +387,40 @@ public class ProductService : IProductService
         // 6) Return the updated product in DTO form.
         return await GetByIdAsync(product.Id);
     }
+
+    // TB-47: generate AI marketing content for an existing product.
+    // Returns a SUGGESTION for the admin to review; nothing is persisted.
+    public async Task<ProductContentResponse> GenerateContentAsync(int id, GenerateContentRequest request)
+    {
+        // 1) VALIDATE the request shape -> 400 if bad (specs required, max 500 chars).
+        var validation = await _generateContentValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) LOAD the product AND its Category. The Include is REQUIRED so that
+        //    product.Category.Name is populated (without it, Category would be null).
+        var product = await _db.Products
+            .Include(p => p.Category)
+            .FirstOrDefaultAsync(p => p.Id == id);
+        if (product is null)
+            throw new NotFoundException($"Product with id {id} was not found.");
+
+        // 3) Ask the AI service to draft content, feeding values FROM the product row.
+        var content = await _gemini.GenerateProductContentAsync(
+            product.Name,
+            product.Category.Name,
+            request.Specs);
+
+        // 4) Return the suggestion. We DELIBERATELY do not save it — the admin must
+        //    call PUT /products/{id} to keep anything (TB-47 requirement).
+        return content;
+    }
+
     public async Task DeleteAsync(int id)
     {
         // Load the tracked entity (the global filter means this finds only NOT-deleted ones).
