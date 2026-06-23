@@ -40,7 +40,7 @@ namespace Buyit.Api.Middleware
                 NotFoundException => HttpStatusCode.NotFound,          // this is for 404
                 ConflictException => HttpStatusCode.Conflict,          // this is for 409
                 SftpConnectionException => HttpStatusCode.BadGateway,
-                SftpPathNotFoundException => HttpStatusCode.NotFound,
+                SftpFileNotFoundException => HttpStatusCode.NotFound,
                 _ => HttpStatusCode.InternalServerError                // this is for 500
             };
 

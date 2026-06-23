@@ -47,13 +47,21 @@ public class SftpImportService : ISftpImportService
             if (!client.Exists(_settings.FilePath))
             {
                 _logger.LogWarning("File not found on SFTP server at path {FilePath}", _settings.FilePath);
-                throw new Buyit.Domain.Exceptions.SftpPathNotFoundException($"File '{_settings.FilePath}' was not found on the SFTP server.");
+                throw new Buyit.Domain.Exceptions.SftpFileNotFoundException($"File '{_settings.FilePath}' was not found on the SFTP server.");
             }
 
             // Download the file into a memory stream
             using var memoryStream = new MemoryStream();
-            client.DownloadFile(_settings.FilePath, memoryStream);
+            await client.DownloadFileAsync(_settings.FilePath, memoryStream);
             memoryStream.Position = 0;
+
+            const long maxBytes = 10L * 1024 * 1024;
+            if (memoryStream.Length == 0)
+                throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+                { ["file"] = ["The file on the SFTP server is empty."] });
+            if (memoryStream.Length > maxBytes)
+                throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+                { ["file"] = ["The file on the SFTP server exceeds the 10 MB limit."] });
 
             _logger.LogInformation("File downloaded from SFTP path {FilePath}, size {Size} bytes",
                 _settings.FilePath, memoryStream.Length);

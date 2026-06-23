@@ -1,9 +1,9 @@
 ﻿using Asp.Versioning;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;  
 using Microsoft.AspNetCore.Http;           
+using Microsoft.AspNetCore.Mvc;
 
 namespace Buyit.Api.Controllers;
 
@@ -13,10 +13,11 @@ namespace Buyit.Api.Controllers;
 public class ProductController : ControllerBase
 {
     private readonly IProductService _products;
-
-    public ProductController(IProductService products)
+    private readonly ISftpImportService _sftpImportService;
+    public ProductController(IProductService products, ISftpImportService sftpImportService)
     {
         _products = products;
+        _sftpImportService = sftpImportService;
     }
 
     /// <summary>Get a paged, filtered, sorted list of products.</summary>
@@ -149,10 +150,11 @@ public class ProductController : ControllerBase
     [ProducesResponseType(typeof(ImportResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status502BadGateway)]
-    public async Task<ActionResult<ImportResultDto>> ImportFromSftp(
-        [FromServices] ISftpImportService sftpImportService)
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ImportResultDto>> ImportFromSftp()
     {
-        var result = await sftpImportService.ImportFromSftpAsync();
+        var result = await _sftpImportService.ImportFromSftpAsync();
         return Ok(result);
     }
 }
