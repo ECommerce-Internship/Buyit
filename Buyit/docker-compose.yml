@@ -37,5 +37,16 @@ services:
       timeout: 3s
       retries: 5
 
+  sftp:
+    image: atmoz/sftp
+    container_name: sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ./sftp-files:/home/testuser/upload
+    command: testuser:testpass:::upload
+    profiles:
+      - dev
+
 volumes:
   postgres_data:
