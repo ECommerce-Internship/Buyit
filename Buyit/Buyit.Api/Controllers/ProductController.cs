@@ -1,9 +1,9 @@
 ﻿using Asp.Versioning;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;  
 using Microsoft.AspNetCore.Http;           
+using Microsoft.AspNetCore.Mvc;
 
 namespace Buyit.Api.Controllers;
 
@@ -13,10 +13,11 @@ namespace Buyit.Api.Controllers;
 public class ProductController : ControllerBase
 {
     private readonly IProductService _products;
-
-    public ProductController(IProductService products)
+    private readonly ISftpImportService _sftpImportService;
+    public ProductController(IProductService products, ISftpImportService sftpImportService)
     {
         _products = products;
+        _sftpImportService = sftpImportService;
     }
 
     /// <summary>Get a paged, filtered, sorted list of products.</summary>
@@ -39,8 +40,9 @@ public class ProductController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Create a new product (and its inventory record).</summary>
+    /// <summary>Create a new product (and its inventory record). Seller (own store) or Admin.</summary>
     [HttpPost]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(ProductResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -51,8 +53,9 @@ public class ProductController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = result.Id, version = "1.0" }, result);
     }
 
-    /// <summary>Update an existing product.</summary>
+    /// <summary>Update an existing product. Seller (own store) or Admin.</summary>
     [HttpPut("{id:int}")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(ProductResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -62,8 +65,38 @@ public class ProductController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Soft-delete a product. Returns 204 No Content.</summary>
+    /// <summary>
+    /// Generate AI marketing content (description, features, SEO title, meta description) for an
+    /// existing product. <b>Admin only.</b>
+    /// <para>
+    /// This returns a <b>SUGGESTION for review — it is NOT saved.</b> To keep any of it, the admin
+    /// must explicitly call <c>PUT /api/v1/products/{id}</c> with the chosen values.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// Prefer this endpoint for any product that already exists: it reads the product's name and
+    /// category from the database, so the caller only sends <c>specs</c>. Use the free-form
+    /// <c>POST /api/v1/ai/product-content</c> only when no product row exists yet (e.g. drafting
+    /// before creation), where the caller must supply the name and category explicitly.
+    /// </remarks>
+    [HttpPost("{id:int}/generate-content")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(ProductContentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<ProductContentResponse>> GenerateContent(
+        int id, [FromBody] GenerateContentRequest request)
+    {
+        var suggestion = await _products.GenerateContentAsync(id, request);
+        return Ok(suggestion);
+    }
+
+    /// <summary>Soft-delete a product. Returns 204 No Content. Seller (own store) or Admin.</summary>
     [HttpDelete("{id:int}")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id)
@@ -106,7 +139,7 @@ public class ProductController : ControllerBase
 
     /// <summary>Upload (or replace) a product's image. Admin only. multipart/form-data.</summary>
     [HttpPost("{id:int}/image")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -134,12 +167,26 @@ public class ProductController : ControllerBase
 
     /// <summary>Remove a product's image. Admin only.</summary>
     [HttpDelete("{id:int}/image")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteImage(int id)
     {
         await _products.RemoveProductImageAsync(id);
         return NoContent();
+    }
+
+    // Download products Excel from SFTP and import it, for Admin only 
+    [HttpPost("import-from-sftp")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(ImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ImportResultDto>> ImportFromSftp()
+    {
+        var result = await _sftpImportService.ImportFromSftpAsync();
+        return Ok(result);
     }
 }

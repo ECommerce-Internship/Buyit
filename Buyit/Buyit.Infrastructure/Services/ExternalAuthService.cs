@@ -134,6 +134,12 @@ public class ExternalAuthService : IExternalAuthService
 
     private async Task<AuthResponse> IssueTokensAsync(User user)
     {
+        // TB-147: ensure owned stores are loaded so the JWT can carry the StoreIds claim.
+        // Google sign-ins are Customers (no stores) -> claim stays absent, but loading here
+        // keeps behaviour consistent and correct if a seller ever links a Google account.
+        if (!_db.Entry(user).Collection(u => u.Stores).IsLoaded)
+            await _db.Entry(user).Collection(u => u.Stores).LoadAsync();
+
         var accessToken = _tokens.GenerateAccessToken(user);
         var refreshTokenValue = _tokens.GenerateRefreshToken();
 

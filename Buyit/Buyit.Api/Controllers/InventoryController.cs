@@ -6,7 +6,7 @@ namespace Buyit.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/inventory")]
-[Authorize(Roles = "Admin")]
+[Authorize(Roles = "Admin,Seller")]   // per-product writes allow sellers; list views stay Admin-only below
 public class InventoryController : ControllerBase
 {
     private readonly IInventoryService _inventoryService;
@@ -18,6 +18,7 @@ public class InventoryController : ControllerBase
 
     // GET api/v1/inventory
     [HttpGet]
+    [Authorize(Roles = "Admin")]   // full inventory list is an admin-only view
     public async Task<IActionResult> GetAll()
     {
         var inventory = await _inventoryService.GetAllAsync();
@@ -42,6 +43,7 @@ public class InventoryController : ControllerBase
 
     // GET api/v1/inventory/low-stock
     [HttpGet("low-stock")]
+    [Authorize(Roles = "Admin")]   // platform-wide low-stock list is admin-only
     public async Task<IActionResult> GetLowStock()
     {
         var inventory = await _inventoryService.GetLowStockAsync();

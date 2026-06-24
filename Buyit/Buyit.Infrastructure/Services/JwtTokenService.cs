@@ -1,6 +1,7 @@
-﻿using Buyit.Application.Common;
+﻿    using Buyit.Application.Common;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
+using Buyit.Domain.Enums;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System;
@@ -9,17 +10,19 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using Serilog;
+using Microsoft.Extensions.Logging;
 
 namespace Buyit.Infrastructure.Services
 {
     public class JwtTokenService : IJwtTokenService
     {
         private readonly JwtSettings _settings;
+        private readonly ILogger<JwtTokenService> _logger;
 
-        public JwtTokenService(IOptions<JwtSettings> options)
+        public JwtTokenService(IOptions<JwtSettings> options, ILogger<JwtTokenService> logger)
         {
             _settings = options.Value;
+            _logger = logger;
         }
 
         public string GenerateAccessToken(User user)
@@ -38,6 +41,26 @@ namespace Buyit.Infrastructure.Services
                 new Claim(JwtRegisteredClaimNames.Email, user.Email),
                 new Claim("role", user.Role.ToString())
             };
+
+            // Marketplace (TB-147): embed the store ids this user owns so the frontend can
+            // route sellers and the backend can scope seller actions. The owning service
+            // (AuthService/ExternalAuthService.IssueTokensAsync) loads user.Stores first.
+            //
+            // Per the TB-147 acceptance criteria the claim is for SELLERS only: customers and
+            // admins must get an empty/absent list. We therefore gate on the Seller role —
+            // the admin happens to OWN the seeded Platform Store (TB-122), so without this
+            // gate an admin's token would wrongly carry storeIds and trip the FE SellerRoute.
+            if (user.Role == UserRole.Seller)
+            {
+                var storeIds = (user.Stores ?? new List<Store>())
+                    .Select(s => s.Id)
+                    .ToList();
+                if (storeIds.Count > 0)
+                {
+                    // Single claim, comma-separated (e.g. "3,7"); the frontend splits on ",".
+                    claims.Add(new Claim("storeIds", string.Join(",", storeIds)));
+                }
+            }
             // 4. Assemble the token: claims + issuer/audience + expiry + signature
             var token = new JwtSecurityToken(
                 issuer: _settings.Issuer,
@@ -47,7 +70,7 @@ namespace Buyit.Infrastructure.Services
                 signingCredentials: signingCredentials);
             // 5. Serialize the token object into the compact "header.payload.signature" string
             var tokenHandler = new JwtSecurityTokenHandler();
-            Log.Information(
+            _logger.LogInformation(
             "Generated JWT access token for user {UserId} with role {Role}",
             user.Id,
             user.Role);

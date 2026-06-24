@@ -8,6 +8,7 @@ using OfficeOpenXml;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
+using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
@@ -29,13 +30,27 @@ public class ProductServiceTests
     private static ProductService BuildSut(
         out AppDbContext db,
         out Mock<IValidator<CreateProductRequest>> createValidatorMock,
-        out Mock<IValidator<UpdateProductRequest>> updateValidatorMock)
+        out Mock<IValidator<UpdateProductRequest>> updateValidatorMock,
+        out Mock<IGeminiService> geminiMock)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
         db = new AppDbContext(options);
+
+        // Every product needs an owning store (StoreId is NOT NULL). Seed one approved
+        // store (Id = 1) that tests assign their products to.
+        db.Stores.Add(new Store
+        {
+            Id = 1,
+            OwnerUserId = 1,
+            Name = "Test Store",
+            Slug = "test-store",
+            Status = StoreStatus.Approved,
+            CommissionRate = 0m
+        });
+        db.SaveChanges();
 
         createValidatorMock = new Mock<IValidator<CreateProductRequest>>();
         createValidatorMock
@@ -55,12 +70,31 @@ public class ProductServiceTests
         var blobMock = new Mock<IBlobStorageService>();
         var loggerMock = new Mock<ILogger<ProductService>>();
 
+        // TB-47: the AI generator is mocked so tests NEVER call the real Gemini API.
+        // Exposed via the out-parameter so a test can set up its canned reply.
+        geminiMock = new Mock<IGeminiService>();
+
+        // TB-47: validator mocked to ALWAYS pass — we test service logic, not validation rules.
+        var generateContentValidatorMock = new Mock<IValidator<GenerateContentRequest>>();
+        generateContentValidatorMock
+            .Setup(v => v.ValidateAsync(It.IsAny<GenerateContentRequest>(), default))
+            .ReturnsAsync(new ValidationResult());
+
+        // Current user mocked as an Admin so ownership checks pass — these tests exercise
+        // ProductService logic, not authorization (dedicated ownership tests come in TB-131).
+        var currentUserMock = new Mock<ICurrentUserService>();
+        currentUserMock.Setup(c => c.IsAdmin).Returns(true);
+        currentUserMock.Setup(c => c.UserId).Returns(1);
+
         return new ProductService(
             db,
             createValidatorMock.Object,
             updateValidatorMock.Object,
             cacheMock.Object,
             blobMock.Object,
+            currentUserMock.Object,
+            geminiMock.Object,
+            generateContentValidatorMock.Object,
             loggerMock.Object);
     }
 
@@ -100,7 +134,7 @@ public class ProductServiceTests
     [Fact]
     public async Task CreateProduct_ValidRequest_ReturnsProductResponse()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -111,6 +145,7 @@ public class ProductServiceTests
             Sku = "MOUSE-001",
             Price = 24.99m,
             CategoryId = 1,
+            StoreId = 1,
             InitialStock = 50
         };
 
@@ -128,7 +163,7 @@ public class ProductServiceTests
     [Fact]
     public async Task CreateProduct_DuplicateSKU_ThrowsConflictException()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         db.Products.Add(new Product
         {
@@ -137,7 +172,8 @@ public class ProductServiceTests
             Description = "Already in catalogue",
             Sku = "MOUSE-001",
             Price = 19.99m,
-            CategoryId = 1
+            CategoryId = 1,
+            StoreId = 1
         });
         await db.SaveChangesAsync();
 
@@ -148,6 +184,7 @@ public class ProductServiceTests
             Sku = "MOUSE-001",
             Price = 29.99m,
             CategoryId = 1,
+            StoreId = 1,
             InitialStock = 10
         };
 
@@ -160,7 +197,7 @@ public class ProductServiceTests
     [Fact]
     public async Task GetProductById_ExistingId_ReturnsProductResponse()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 7, Name = "Audio" });
         db.Products.Add(new Product
         {
@@ -170,6 +207,7 @@ public class ProductServiceTests
             Sku = "HEAD-042",
             Price = 149.50m,
             CategoryId = 7,
+            StoreId = 1,
             ImageUrl = "https://example.com/h.png",
             Inventory = new Inventory { QuantityInStock = 8 }
         });
@@ -193,7 +231,7 @@ public class ProductServiceTests
     [Fact]
     public async Task GetProductById_NotFound_ThrowsNotFoundException()
     {
-        var sut = BuildSut(out _, out _, out _);
+        var sut = BuildSut(out _, out _, out _, out _);
 
         Func<Task> act = async () => await sut.GetByIdAsync(999);
 
@@ -204,7 +242,7 @@ public class ProductServiceTests
     [Fact]
     public async Task DeleteProduct_ExistingProduct_SetsIsDeletedTrue()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         db.Products.Add(new Product
         {
@@ -227,7 +265,7 @@ public class ProductServiceTests
     [Fact]
     public async Task ImportExcel_ValidRows_ReturnsCorrectAddedCount()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -249,7 +287,7 @@ public class ProductServiceTests
     [Fact]
     public async Task ImportExcel_InvalidPrice_IncludesRowInFailedList()
     {
-        var sut = BuildSut(out var db, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -264,5 +302,66 @@ public class ProductServiceTests
         result.Errors.Should().ContainSingle()
               .Which.Row.Should().Be(2);
         result.Errors[0].Reason.Should().Contain("Price");
+    }
+
+    // TB-47: happy path — an existing product yields the AI's suggestion, and the
+    // product row is NOT modified (the endpoint returns a draft, it never saves).
+    [Fact]
+    public async Task GenerateContentAsync_ProductExists_ReturnsSuggestionAndDoesNotSave()
+    {
+        // Arrange — a product in the in-memory DB, plus a fake AI reply from the mock.
+        var sut = BuildSut(out var db, out _, out _, out var geminiMock);
+        var category = new Category { Name = "Phones" };
+        var product = new Product
+        {
+            Name = "Pixelon X",
+            Description = "old text",
+            Sku = "PX-1",
+            Price = 999m,
+            Category = category,
+            StoreId = 1
+        };
+        db.Products.Add(product);
+        await db.SaveChangesAsync();
+
+        var aiReply = new ProductContentResponse(
+            "shiny new description",
+            new List<string> { "OLED", "5000mAh" },
+            "Pixelon X — Buy Now",
+            "The Pixelon X meta description.");
+        geminiMock
+            .Setup(g => g.GenerateProductContentAsync(
+                "Pixelon X", "Phones", "6.1in OLED, 5000mAh",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(aiReply);
+
+        var request = new GenerateContentRequest("6.1in OLED, 5000mAh");
+
+        // Act
+        var result = await sut.GenerateContentAsync(product.Id, request);
+
+        // Assert — returns the AI suggestion (check the fields, not just the reference)...
+        result.Should().BeEquivalentTo(aiReply);
+        result.Description.Should().Be("shiny new description");
+        result.Features.Should().HaveCount(2);
+        result.SeoTitle.Should().Be("Pixelon X — Buy Now");
+        // ...and crucially did NOT overwrite the stored product.
+        var reloaded = await db.Products.FindAsync(product.Id);
+        reloaded!.Description.Should().Be("old text");
+    }
+
+    // TB-47: a missing product id must surface as a NotFoundException (-> 404).
+    [Fact]
+    public async Task GenerateContentAsync_ProductMissing_ThrowsNotFoundException()
+    {
+        // Arrange — empty DB, so id 999 cannot exist.
+        var sut = BuildSut(out _, out _, out _, out _);
+        var request = new GenerateContentRequest("anything");
+
+        // Act
+        Func<Task> act = async () => await sut.GenerateContentAsync(999, request);
+
+        // Assert
+        await act.Should().ThrowAsync<NotFoundException>();
     }
 }

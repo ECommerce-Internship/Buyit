@@ -37,6 +37,7 @@ public class AuthServiceTests
 
         // Real validators (they have no dependencies).
         var registerValidator = new RegisterRequestValidator();
+        var registerSellerValidator = new RegisterSellerRequestValidator();
         var updateValidator = new UpdateProfileRequestValidator();
         var changeValidator = new ChangePasswordRequestValidator();
 
@@ -49,6 +50,7 @@ public class AuthServiceTests
             db,
             jwtMock.Object,
             registerValidator,
+            registerSellerValidator,
             updateValidator,
             changeValidator,
             jwtOptions,

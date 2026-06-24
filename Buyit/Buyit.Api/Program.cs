@@ -14,6 +14,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql.EntityFrameworkCore.PostgreSQL;
 using OfficeOpenXml;
 using Serilog;
 using StackExchange.Redis;
@@ -74,6 +75,12 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IExternalAuthService, ExternalAuthService>();
 builder.Services.AddScoped<IValidator<RegisterRequest>, RegisterRequestValidator>();
+// --- TB-123/124/125: Seller side (stores, seller registration, ownership) ---
+builder.Services.AddScoped<IStoreService, StoreService>();
+builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequestValidator>();
+builder.Services.AddScoped<IValidator<CreateStoreRequest>, CreateStoreRequestValidator>();
+builder.Services.AddHttpContextAccessor();   // lets CurrentUserService read the request's claims
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IValidator<CreateCategoryRequest>, CreateCategoryRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateCategoryRequest>, UpdateCategoryRequestValidator>();
 // TB-76: lets the Google auth controller make a server-to-server call to Google's token endpoint
@@ -90,6 +97,10 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 // --- TB-40: Payment feature registrations ---
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequestValidator>();
+// --- TB-41: Review feature registrations ---
+builder.Services.AddScoped<IReviewService, ReviewService>();
+builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
+builder.Services.AddScoped<IEmailService, EmailService>();
 
 // Register email service — priority: SendGrid (prod) > Ethereal (dev) > placeholder (no config)
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
@@ -103,10 +114,14 @@ else if (!string.IsNullOrWhiteSpace(etherealUsername))
     builder.Services.AddScoped<IEmailService, EtherealEmailService>();
 else
     builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.Configure<SftpSettings>(builder.Configuration.GetSection("Sftp"));
+builder.Services.AddScoped<ISftpImportService, SftpImportService>();
 // --- TB-32: Product feature registrations ---
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateProductRequest>, UpdateProductRequestValidator>();
+// TB-47: validator for the product generate-content endpoint.
+builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRequestValidator>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
@@ -127,6 +142,7 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
