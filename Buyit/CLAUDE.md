@@ -9,9 +9,14 @@ dependency rules, and the mandatory patterns every contribution must follow.
 ## 1. What this is
 
 Buyit is an e-commerce backend: an ASP.NET Core **Web API** built on **.NET 10** using
-**Clean Architecture**. It covers auth (JWT + Google OAuth), products, categories,
-inventory, carts, and orders, with EF Core (PostgreSQL via Npgsql), Redis caching, Serilog→Seq
-logging, and Azure Blob storage.
+**Clean Architecture**. It is a **multi-vendor marketplace** covering auth (JWT + Google
+OAuth), products, categories, inventory, carts, orders with **per-store fulfilment**,
+stores/sellers, reviews, payments, coupons, **admin & seller dashboards**, **AI
+product-content generation (Google Gemini)**, and **SFTP product import**. Cross-cutting
+infrastructure: EF Core (PostgreSQL via Npgsql), Redis caching, Serilog→Seq logging, Azure
+Blob storage, **email notifications (provider-selected: SendGrid → Ethereal → no-op
+placeholder)**, and a **background worker** (`IHostedService`) that drains an **Azure Storage
+Queue** to send low-stock alert emails.
 
 The solution file is `Buyit.slnx` (the new XML solution format). There is **no `.sln`** —
 use `Buyit.slnx` with the `dotnet` CLI (8.0.x+ tooling) or Visual Studio 2022+.
@@ -65,7 +70,16 @@ Connection strings and settings come from `appsettings.json` /
 - `ConnectionStrings:Redis` — Redis (defaults to `localhost:6379`)
 - `ConnectionStrings:AzureBlobStorage` — Azure Blob (or Azurite)
 - `Jwt:Issuer` / `Jwt:Audience` / `Jwt:Secret` / `Jwt:ExpiryMinutes`
-- `Authentication:Google:*` — Google OAuth
+- `Authentication:Google:*` — Google OAuth (`ClientId` / `ClientSecret` / `RedirectUri`)
+- `Gemini:ApiKey` / `Gemini:Model` — Google Gemini (AI product-content generation)
+- `Sftp:Host` / `Sftp:Port` / `Sftp:Username` / `Sftp:Password` — SFTP product import
+- **Email (provider auto-selected at startup, see §8):**
+  - `SendGrid:ApiKey` / `SendGrid:FromEmail` / `SendGrid:FromName` — if set, SendGrid is used (prod)
+  - `Ethereal:Host` / `Ethereal:Port` / `Ethereal:Username` / `Ethereal:Password` — SMTP test inbox (dev)
+  - if neither is configured, a no-op placeholder `EmailService` is registered
+- `AzureQueue:ConnectionString` / `AzureQueue:LowStockQueueName` /
+  `AzureQueue:OrderConfirmationsQueueName` / `AzureQueue:PollIntervalSeconds` — Azure Storage
+  Queue feeding the low-stock background worker
 - `Seq:ServerUrl` — Seq sink (defaults to `http://localhost:5341`)
 
 **Never commit real secrets.** `appsettings.Development.json` is for local use only.
@@ -158,7 +172,7 @@ on nothing.
 | -------------------- | ----------------------------------- | ----------------------------------- | -------------- |
 | **Buyit.Domain**     | *(nothing — no project refs)*       | any other Buyit project             | Entities, enums, constants, **custom exceptions**, pure domain helpers. No EF, no ASP.NET. |
 | **Buyit.Application**| `Buyit.Domain`                      | `Infrastructure`, `Api`             | DTOs, service **interfaces**, FluentValidation **validators**, settings POCOs. The contract layer. |
-| **Buyit.Infrastructure** | `Buyit.Application`, `Buyit.Domain` | `Api`                           | EF Core `DbContext` + migrations, **service implementations**, external integrations (Redis, Blob, JWT, email). |
+| **Buyit.Infrastructure** | `Buyit.Application`, `Buyit.Domain` | `Api`                           | EF Core `DbContext` + migrations, **service implementations**, external integrations (Redis, Blob, JWT, email), and **background workers** (`IHostedService` in `Workers/`, e.g. `LowStockWorker`). |
 | **Buyit.Api**        | `Buyit.Application`, `Buyit.Infrastructure` | —                           | Controllers, middleware, DI wiring (`Program.cs`), extensions. The composition root. |
 | **Buyit.Tests**      | `Buyit.Infrastructure`              | —                                   | xUnit unit tests of services. |
 
@@ -187,6 +201,9 @@ Custom exceptions in `Buyit.Domain/Exceptions/` are the single error-signaling m
 | `ForbiddenException`   | 403         | Authenticated but not allowed          |
 | `NotFoundException`    | 404         | Resource does not exist                |
 | `ConflictException`    | 409         | Business conflict (e.g. duplicate name)|
+| `ExternalServiceException` | 502     | A downstream/3rd-party call failed (e.g. Gemini) |
+| `SftpConnectionException`  | 502     | Could not connect to the SFTP server   |
+| `SftpFileNotFoundException`| 404     | Expected file missing on the SFTP server |
 
 Rules:
 - **Services throw** these exceptions. They never return null-as-error or status codes.
@@ -295,7 +312,13 @@ form; older controllers (e.g. `CategoryController`) should be migrated to it whe
   `ILogger<T>` and log meaningful events in services (see `CategoryService`). Request
   logging is configured in `Program.cs` (4xx → Warning, 5xx → Error).
 - **DI registration:** everything is registered in `Program.cs`. Services are `Scoped`;
-  `IConnectionMultiplexer` (Redis) and `BlobServiceClient` are `Singleton`.
+  `IConnectionMultiplexer` (Redis) and `BlobServiceClient` are `Singleton`. Background workers
+  in `Buyit.Infrastructure/Workers/` register via `AddHostedService<T>()` (run as `Singleton`
+  by the host — resolve scoped services inside them with an injected `IServiceScopeFactory`).
+- **Email provider is chosen at startup, not hard-coded:** `Program.cs` registers
+  `IEmailService` by precedence — `SendGridEmailService` if `SendGrid:ApiKey` is set, else
+  `EtherealEmailService` if `Ethereal:Username` is set, else the no-op `EmailService`. Bind new
+  email config as a settings POCO in `Buyit.Application/Common/` (e.g. `EtherealSettings`).
 - **Async all the way:** service and controller methods are `async Task<...>`; EF calls use
   the `...Async` variants.
 - **UTC timestamps (Npgsql):** the Postgres provider maps `DateTime` to `timestamp with time
