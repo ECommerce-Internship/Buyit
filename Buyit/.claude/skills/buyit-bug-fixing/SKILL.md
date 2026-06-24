@@ -1,8 +1,8 @@
 ---
-name: buyit-bug-fix
+name: buyit-bug-fixing
 description: Structured bug-fixing procedure for the Buyit codebase. Enforces: reproduce with a failing test → locate the root cause → fix → confirm test passes → scan for the same bug elsewhere. Use when asked to fix, debug, or investigate a bug in Buyit code.
 version: 1.0
-origin: TB-84
+origin: TB-83
 ---
 
 # Buyit Bug Fix
@@ -77,6 +77,44 @@ State clearly: *"Scanned for [pattern]. Found [N] additional occurrences at: [lo
 
 ## Output format
 
+Produce a single Markdown report structured exactly like this:
+
+```
+# Buyit Bug Fix — <bug title> (<date>)
+
+## 0. Bug summary
+- One-line description of the bug
+- Severity (Critical/High/Medium/Low)
+- Affected file(s) and line(s)
+
+## 1. Step 1 — Reproduce
+- Failing test name or reproduction steps
+- Expected vs actual behavior
+- If no test: explain why and what manual verification replaces it
+
+## 2. Step 2 — Locate
+- Root cause explanation
+- Exact offending code quoted with file:line
+
+## 3. Step 3 — Fix
+- Explanation of the fix and why it is correct
+- Before/after code with exact file paths
+
+## 4. Step 4 — Confirm
+- Build result
+- Test result
+- Manual verification steps if applicable
+
+## 5. Step 5 — Scan
+- Pattern searched
+- All occurrences found
+- Status of each (fixed / not applicable / needs attention)
+
+## 6. Concept learned
+A short paragraph explaining the underlying concept so the developer
+recognizes this class of bug in the future.
+```
+
 ## Example invocation
 
 To invoke this skill, say:
@@ -88,7 +126,5 @@ all five steps and produce the structured report.
 
 Example:
 > /buyit-bug-fix
-> `Program.cs` has a duplicate `IEmailService` registration — `AddScoped<IEmailService, EmailService>` 
+> `Program.cs` has a duplicate `IEmailService` registration — `AddScoped<IEmailService, EmailService>`
 > appears twice, once unconditionally and once in the else branch.
-
-Produce a single Markdown report structured exactly like this:
