@@ -1,3 +1,6 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
+using Azure.Storage.Blobs;
 using Buyit.Api.Extensions;
 using Buyit.Api.Middleware;
 using Buyit.Application.Common;
@@ -6,6 +9,7 @@ using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
+using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -14,9 +18,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL;
 using OfficeOpenXml;
 using Serilog;
 using StackExchange.Redis;
-using System.IdentityModel.Tokens.Jwt;
-using System.Text;
-using Azure.Storage.Blobs;
+
 
 // Bootstrap logger — captures startup errors before the host config is loaded
 Log.Logger = new LoggerConfiguration()
@@ -99,6 +101,19 @@ builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequ
 builder.Services.AddScoped<IReviewService, ReviewService>();
 builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+
+// Register email service — priority: SendGrid (prod) > Ethereal (dev) > placeholder (no config)
+builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
+
+var sendGridApiKey = builder.Configuration["SendGrid:ApiKey"];
+var etherealUsername = builder.Configuration["Ethereal:Username"];
+
+if (!string.IsNullOrWhiteSpace(sendGridApiKey))
+    builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+else if (!string.IsNullOrWhiteSpace(etherealUsername))
+    builder.Services.AddScoped<IEmailService, EtherealEmailService>();
+else
+    builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.Configure<SftpSettings>(builder.Configuration.GetSection("Sftp"));
 builder.Services.AddScoped<ISftpImportService, SftpImportService>();
 // --- TB-32: Product feature registrations ---
@@ -110,6 +125,12 @@ builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRe
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+
+// --- TB-43: Azure Queue + SendGrid registrations ---
+builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
+builder.Services.Configure<SendGridSettings>(builder.Configuration.GetSection("SendGrid"));
+builder.Services.AddHostedService<LowStockWorker>();
+
 // --- TB-46: Gemini AI product-content feature registrations ---
 builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
 

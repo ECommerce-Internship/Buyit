@@ -487,3 +487,4 @@ sftp-files/
 # Copy appsettings.Development.example.json to appsettings.Development.json and fill in your own values.
 appsettings.Development.json
 **/.claude/settings.local.json
+/Buyit/sftp-files
