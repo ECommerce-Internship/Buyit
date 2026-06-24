@@ -30,12 +30,12 @@ The project's conventions are in `CLAUDE.md` (solution root). Read it first.
 ## The five-step procedure (follow in order — mandatory)
 
 ### Step 1 — Reproduce
-Before touching any code, reproduce the bug:
-- Write a failing test that demonstrates the bug, OR
-- Identify an existing test that fails because of it, OR
-- Document the exact steps (endpoint, payload, environment) that trigger the bug.
+Write a failing test that demonstrates the bug. This is the default and preferred path.
+Only skip the test if the bug is purely structural (e.g. a duplicate DI registration
+that is proven dead by static analysis) — in that case document exactly why a test
+cannot be written and what manual verification replaces it.
 
-**Do not proceed to Step 2 until you can reliably reproduce the bug.**
+Do not proceed to Step 2 until the bug is reproduced.
 
 State clearly: *"The bug is reproduced by: [test name / steps]"*
 
@@ -76,5 +76,19 @@ Search the entire codebase for the same bug pattern:
 State clearly: *"Scanned for [pattern]. Found [N] additional occurrences at: [locations]"*
 
 ## Output format
+
+## Example invocation
+
+To invoke this skill, say:
+
+/buyit-bug-fix
+
+Then describe the bug or paste the relevant code. The skill will walk through
+all five steps and produce the structured report.
+
+Example:
+> /buyit-bug-fix
+> `Program.cs` has a duplicate `IEmailService` registration — `AddScoped<IEmailService, EmailService>` 
+> appears twice, once unconditionally and once in the else branch.
 
 Produce a single Markdown report structured exactly like this:
