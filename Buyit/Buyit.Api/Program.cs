@@ -100,7 +100,6 @@ builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequ
 // --- TB-41: Review feature registrations ---
 builder.Services.AddScoped<IReviewService, ReviewService>();
 builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
-builder.Services.AddScoped<IEmailService, EmailService>();
 
 // Register email service — priority: SendGrid (prod) > Ethereal (dev) > placeholder (no config)
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
