@@ -20,6 +20,7 @@
     <PackageReference Include="Azure.Storage.Queues" Version="12.27.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="EPPlus" Version="8.6.0" />
+    <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
     <!-- Pin EF Core runtime + design-time to 10.0.8 so all EF packages stay on one version.
          Npgsql 10.0.2 only floors EF Core at 10.0.4, and EF Tools floors Design at 8.0.0;

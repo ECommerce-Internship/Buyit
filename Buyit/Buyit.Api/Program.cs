@@ -90,10 +90,17 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 // --- TB-40: Payment feature registrations ---
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequestValidator>();
-// Register SendGridEmailService if API key is configured, otherwise fall back to placeholder
+
+// Register email service — priority: SendGrid (prod) > Ethereal (dev) > placeholder (no config)
+builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
+
 var sendGridApiKey = builder.Configuration["SendGrid:ApiKey"];
+var etherealUsername = builder.Configuration["Ethereal:Username"];
+
 if (!string.IsNullOrWhiteSpace(sendGridApiKey))
     builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+else if (!string.IsNullOrWhiteSpace(etherealUsername))
+    builder.Services.AddScoped<IEmailService, EtherealEmailService>();
 else
     builder.Services.AddScoped<IEmailService, EmailService>();
 // --- TB-32: Product feature registrations ---
