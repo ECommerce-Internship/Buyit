@@ -15,11 +15,12 @@ public class OrderTools
         _orderService = orderService;
     }
 
-    [McpServerTool, Description("Get full details of a specific order by its ID. Admin can view any order.")]
+    [McpServerTool, Description("Get full details of a specific order by its ID. When isAdmin is true, userId is not required and can be left as 0.")]
     public async Task<string> get_order(
-        [Description("The order ID")] int orderId,
-        [Description("The user ID making the request")] int userId,
-        [Description("Whether the requester is an admin")] bool isAdmin = true)
+    [Description("The order ID")] int orderId,
+    [Description("Whether the requester is an admin (default true)")] bool isAdmin = true,
+    [Description("The user ID — only needed if isAdmin is false")] int userId = 0)
+
     {
         var result = await _orderService.GetOrderByIdAsync(orderId, userId, isAdmin);
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
