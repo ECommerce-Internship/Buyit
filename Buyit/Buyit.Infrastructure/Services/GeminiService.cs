@@ -185,17 +185,11 @@ public class GeminiService : IGeminiService
         if (content.Features is null || content.Features.Count != 5)
             throw new ExternalServiceException("The AI response did not contain exactly five features.");
 
-        if (content.SeoTitle is null)
-            throw new ExternalServiceException("The AI SEO title was missing.");
+        if (content.SeoTitle is null || content.SeoTitle.Length > 60)
+            throw new ExternalServiceException("The AI SEO title exceeded 60 characters.");
 
-        if (content.SeoTitle.Length > 60)
-            content = content with { SeoTitle = content.SeoTitle[..60] };
-
-        if (content.MetaDescription is null)
-            throw new ExternalServiceException("The AI meta description was missing.");
-
-        if (content.MetaDescription.Length > 155)
-            content = content with { MetaDescription = content.MetaDescription[..155] };
+        if (content.MetaDescription is null || content.MetaDescription.Length > 155)
+            throw new ExternalServiceException("The AI meta description exceeded 155 characters.");
 
         _logger.LogInformation("Generated AI content for product {ProductName}.", productName);
 
