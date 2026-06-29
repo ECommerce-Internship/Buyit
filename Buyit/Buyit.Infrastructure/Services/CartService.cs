@@ -74,21 +74,21 @@ public class CartService : ICartService
         return BuildCartResponse(cart);
     }
 
-    // UPDATE ITEM: Updates quantity with stock check
-    public async Task<CartResponse> UpdateItemAsync(int userId, int cartItemId, UpdateCartItemRequest request)
+    // UPDATE ITEM: Updates quantity by productId with stock check
+    public async Task<CartResponse> UpdateItemAsync(int userId, int productId, UpdateCartItemRequest request)
     {
         var cart = await GetOrCreateCartAsync(userId);
 
-        var cartItem = cart.CartItems.FirstOrDefault(ci => ci.Id == cartItemId);
+        var cartItem = cart.CartItems.FirstOrDefault(ci => ci.ProductId == productId);
         if (cartItem == null)
-            throw new NotFoundException($"Cart item with ID {cartItemId} was not found.");
+            throw new NotFoundException($"Product with ID {productId} was not found in the cart.");
 
         var product = await _context.Products
             .Include(p => p.Inventory)
-            .FirstOrDefaultAsync(p => p.Id == cartItem.ProductId && !p.IsDeleted);
+            .FirstOrDefaultAsync(p => p.Id == productId && !p.IsDeleted);
 
         if (product == null)
-            throw new NotFoundException($"Product was not found.");
+            throw new NotFoundException($"Product with ID {productId} was not found.");
 
         var availableStock = product.Inventory?.QuantityInStock ?? 0;
         if (availableStock < request.Quantity)
@@ -104,14 +104,14 @@ public class CartService : ICartService
         return BuildCartResponse(cart);
     }
 
-    // REMOVE ITEM: Deletes a single cart item
-    public async Task RemoveItemAsync(int userId, int cartItemId)
+    // REMOVE ITEM: Deletes a single cart item by productId
+    public async Task RemoveItemAsync(int userId, int productId)
     {
         var cart = await GetOrCreateCartAsync(userId);
 
-        var cartItem = cart.CartItems.FirstOrDefault(ci => ci.Id == cartItemId);
+        var cartItem = cart.CartItems.FirstOrDefault(ci => ci.ProductId == productId);
         if (cartItem == null)
-            throw new NotFoundException($"Cart item with ID {cartItemId} was not found.");
+            throw new NotFoundException($"Product with ID {productId} was not found in the cart.");
 
         _context.CartItems.Remove(cartItem);
         await _context.SaveChangesAsync();
