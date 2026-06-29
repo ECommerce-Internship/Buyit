@@ -10,7 +10,7 @@ using Buyit.Application.Interfaces;           // IJwtTokenService
 using Buyit.Domain.Constants;                 // AuthProviders
 using Buyit.Domain.Entities;                  // User, UserExternalLogin
 using Buyit.Domain.Enums;                     // UserRole
-using Buyit.Domain.Exceptions;                // ConflictException, ValidationException
+using Buyit.Domain.Exceptions;                // ValidationException
 using Buyit.Infrastructure.Data;              // AppDbContext
 using Buyit.Infrastructure.Services;          // ExternalAuthService (the system under test)
 
@@ -136,10 +136,12 @@ public class ExternalAuthServiceTests
 
     // -----------------------------------------------------------------
     // TEST 3: The email already belongs to a PASSWORD account (no Google
-    //         link) -> ConflictException (mapped to HTTP 409). No merge.
+    //         link) AND Google verified the email -> the Google identity
+    //         is LINKED to that existing account and tokens are issued
+    //         (account linking). No new/duplicate user is created.
     // -----------------------------------------------------------------
     [Fact]
-    public async Task FindOrCreateUserAsync_EmailBelongsToPasswordAccount_ThrowsConflictException()
+    public async Task FindOrCreateUserAsync_EmailBelongsToPasswordAccount_LinksGoogleAndSignsIn()
     {
         // Arrange: a normal password user with the SAME email, but NO Google link.
         var sut = BuildSut(out var db);
@@ -154,13 +156,21 @@ public class ExternalAuthServiceTests
         });
         await db.SaveChangesAsync();
 
-        var claims = ValidGoogleClaims();   // same email "carl@gmail.com", first Google login
+        var claims = ValidGoogleClaims();   // same email, Google-verified, first Google login
 
-        // Act: wrap the call so the assertion can catch the exception safely.
-        Func<Task> act = async () => await sut.FindOrCreateUserAsync(claims);
+        // Act
+        AuthResponse result = await sut.FindOrCreateUserAsync(claims);
 
-        // Assert: the correct error type is thrown.
-        await act.Should().ThrowAsync<ConflictException>();
+        // Assert: signed into the EXISTING account (not a new one), tokens issued.
+        result.User.Email.Should().Be("carl@gmail.com");
+        result.User.LastName.Should().Be("LocalAccount");   // proves it's the existing user
+        result.AccessToken.Should().Be("fake-access-token");
+
+        // A Google link was created and attached to the existing user; no duplicate user.
+        (await db.Users.CountAsync()).Should().Be(1);
+        var link = await db.UserExternalLogins.SingleAsync();
+        link.Provider.Should().Be(AuthProviders.Google);
+        link.ProviderUserId.Should().Be("google-sub-1234567890");
     }
 
     // -----------------------------------------------------------------
