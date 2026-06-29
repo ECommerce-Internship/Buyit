@@ -49,6 +49,8 @@ Claude called `search_products` with `categoryId` filtered to Electronics and re
 | 2 | Laptop 15-inch | ELEC-LAP-001 | $1,200.00 | 1 unit |
 | 1 | Wireless Mouse | ELEC-MOUSE-001 | $19.99 | ❌ Out of stock |
 
+![search_products](screenshots/search_products.png)
+
 ---
 
 ### 2. `get_product`
@@ -72,6 +74,8 @@ Claude called `get_product` with `productId=1` and returned full product details
 | Reviews | 0 reviews |
 | Listed Since | June 22, 2026 |
 
+![get_product](screenshots/get_product.png)
+
 ---
 
 ### 3. `get_low_stock_products`
@@ -89,6 +93,8 @@ Claude called `get_low_stock_products` and returned all 5 products currently at 
 | Denim Jacket | CLO-JACKET-001 | 3 | 8 | Low |
 | C# in Depth | BOOK-CSHARP-001 | 4 | 5 | Low |
 | Cotton T-Shirt | CLO-TSHIRT-001 | 5 | 20 | Low |
+
+![get_low_stock_products](screenshots/get_low_stock_products.png)
 
 ---
 
@@ -121,6 +127,8 @@ Claude called `get_order` with `orderId=1` and `isAdmin=true` and returned full 
 - Total: $99.98
 - Store: Platform Store (no commission applied)
 
+![get_order](screenshots/get_order.png)
+
 ---
 
 ### 5. `get_customer_orders`
@@ -130,6 +138,8 @@ Claude called `get_order` with `orderId=1` and `isAdmin=true` and returned full 
 **Result:** ✅ Success
 
 Claude called `get_customer_orders` with `userId=1` and returned the paginated order history for the customer. 1 order found matching the order placed on June 26, 2026 for $99.98 (Status: Pending, Payment: Paid).
+
+![get_customer_orders](screenshots/get_customer_orders.png)
 
 ---
 
@@ -150,15 +160,38 @@ Claude called `get_dashboard_summary` and returned a live snapshot of platform m
 | 🆕 Today's New Orders | 0 |
 | 💸 Total Commission | $0.00 |
 
+![get_dashboard_summary](screenshots/get_dashboard_summary.png)
+
 ---
 
 ### 7. `generate_product_content`
 
 **Prompt:** `Generate product content for a wireless gaming mouse`
 
-**Result:** ❌ Failed — Gemini API quota exceeded
+**Result:** ✅ Success
 
-The tool is correctly wired up and calls `IGeminiService` to generate AI product descriptions. The failure is due to the shared Gemini free-tier API key hitting its quota limit during the sprint. The implementation is complete and functional — this is an infrastructure/quota issue, not a code issue.
+Claude called `generate_product_content` and Gemini returned fully structured marketing content.
+
+**SEO Title:** ProStrike X1 Wireless Gaming Mouse - Ultimate Precision
+
+**Meta Description:** Unleash your gaming potential with the ProStrike X1 Wireless Gaming Mouse. Experience 26000 DPI precision, 70-hour battery, ultra-light 68g design, and customizable RGB lighting.
+
+**Product Description:**
+
+Dominate the battlefield with the ProStrike X1 Wireless Gaming Mouse, engineered for peak performance and ultimate freedom. Cut the cord and experience seamless, lag-free action thanks to advanced 2.4GHz wireless connectivity, ensuring every move is registered with pinpoint accuracy.
+
+Equipped with a hyper-accurate 26000 DPI optical sensor and a blazing-fast 1ms polling rate, the ProStrike X1 delivers unrivaled precision and responsiveness. Personalize your setup with 6 programmable buttons and immerse yourself in the game with vibrant RGB lighting offering 16.8 million colors.
+
+Say goodbye to constant charging with an incredible 70-hour battery life. Compatible with Windows, Mac, and Linux.
+
+**Key Features:**
+1. Lag-Free 2.4GHz Wireless Connectivity
+2. Hyper-Accurate 26000 DPI Optical Sensor
+3. Ultra-Lightweight 68g Ergonomic Design
+4. Extended 70-Hour Battery Life
+5. Customizable RGB Lighting & 6 Programmable Buttons
+
+![generate_product_content](screenshots/generate_product_content.png)
 
 ---
 
@@ -172,6 +205,6 @@ The tool is correctly wired up and calls `IGeminiService` to generate AI product
 | `get_order` | ✅ Pass | Admin mode bypasses user check, returns full order graph |
 | `get_customer_orders` | ✅ Pass | Paginated order history by user ID |
 | `get_dashboard_summary` | ✅ Pass | Live platform metrics from DB |
-| `generate_product_content` | ❌ Quota | Gemini free-tier API key exhausted — implementation complete |
+| `generate_product_content` | ✅ Pass | Gemini AI generates SEO title, meta description, product copy, and 5 key features |
 
-**5 of 6 tools fully operational.** The one failure is an external API quota issue unrelated to the MCP implementation.
+**All 6 tools fully operational.** ✅
