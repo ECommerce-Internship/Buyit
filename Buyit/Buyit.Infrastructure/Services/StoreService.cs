@@ -84,6 +84,16 @@ public class StoreService : IStoreService
         return stores.Select(Map).ToList();
     }
 
+    public async Task<IReadOnlyList<StoreResponse>> GetAllStoresAsync()
+    {
+        // No .Where(...) filter — we want every store, any status. Order by name so the
+        // dropdown reads alphabetically. Materialize first, THEN Map (same reason as above).
+        var stores = await _db.Stores
+            .OrderBy(s => s.Name)
+            .ToListAsync();
+        return stores.Select(Map).ToList();
+    }
+
     public Task<StoreResponse> ApproveAsync(int id) => SetStatusAsync(id, StoreStatus.Approved);
     public Task<StoreResponse> SuspendAsync(int id) => SetStatusAsync(id, StoreStatus.Suspended);
     public Task<StoreResponse> RejectAsync(int id) => SetStatusAsync(id, StoreStatus.Rejected);

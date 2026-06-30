@@ -10,6 +10,9 @@ public interface IStoreService
     // Admin: stores awaiting approval.
     Task<IReadOnlyList<StoreResponse>> GetPendingStoresAsync();
 
+    // Admin: EVERY store (any status), ordered by name — for pickers like the product-create form.
+    Task<IReadOnlyList<StoreResponse>> GetAllStoresAsync();
+
     // Admin moderation.
     Task<StoreResponse> ApproveAsync(int storeId);
     Task<StoreResponse> RejectAsync(int storeId);
