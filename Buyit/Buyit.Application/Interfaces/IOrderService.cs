@@ -18,6 +18,10 @@ public interface IOrderService
     // Admin
     Task<PaginatedResult<OrderSummaryResponse>> GetAllOrdersAsync(int page, int pageSize, string? status, DateTime? from, DateTime? to);
 
+    // Admin: set ONE status for the whole order by applying it to every store-slice at once.
+    // Throws ValidationException if any slice can't legally transition (all-or-nothing).
+    Task<OrderResponse> UpdateOrderStatusAsync(int orderId, UpdateOrderStatusRequest request);
+
     // Seller/Admin: list and update the caller's own StoreOrders.
     Task<PaginatedResult<StoreOrderResponse>> GetMyStoreOrdersAsync(int sellerUserId, int page, int pageSize);
     Task<OrderResponse> UpdateStoreOrderStatusAsync(int storeOrderId, int callerUserId, bool isAdmin, UpdateOrderStatusRequest request);

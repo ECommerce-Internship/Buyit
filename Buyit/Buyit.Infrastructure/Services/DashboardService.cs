@@ -179,6 +179,18 @@ public class DashboardService : IDashboardService
         return result;
     }
 
+    public async Task<AdminDashboardResponse> GetAdminDashboardAsync(string period)
+    {
+        // Admin scope = pass null for sellerUserId. Each call is independently cached (2-min TTL).
+        var summary = await GetSummaryAsync(null);
+        var revenue = await GetRevenueByPeriodAsync(period, null);
+        var byStatus = await GetOrdersByStatusAsync(null);
+        var topProducts = await GetTopProductsAsync(null);
+        var newCustomers = await GetNewCustomersAsync(period, null);
+
+        return new AdminDashboardResponse(summary, revenue, byStatus, topProducts, newCustomers);
+    }
+
     // Turns a timestamp into a bucket label for the requested period.
     private static string BucketLabel(DateTime dt, string period) => period?.ToLowerInvariant() switch
     {

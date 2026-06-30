@@ -206,6 +206,7 @@ public class OrderService : IOrderService
             .Select(o => new
             {
                 o.Id,
+                CustomerEmail = o.User.Email,
                 o.OrderDate,
                 o.TotalAmount,
                 StoreOrderCount = o.StoreOrders.Count,
@@ -216,7 +217,7 @@ public class OrderService : IOrderService
             .ToListAsync();
 
         var items = rows.Select(r => new OrderSummaryResponse(
-            r.Id, r.OrderDate, RollUpStatus(r.Statuses), r.TotalAmount,
+            r.Id, r.CustomerEmail, r.OrderDate, RollUpStatus(r.Statuses), r.TotalAmount,
             r.StoreOrderCount, r.ItemCount, r.PaymentStatus)).ToList();
 
         return new PaginatedResult<OrderSummaryResponse>
@@ -289,6 +290,7 @@ public class OrderService : IOrderService
             .Select(o => new
             {
                 o.Id,
+                CustomerEmail = o.User.Email,
                 o.OrderDate,
                 o.TotalAmount,
                 StoreOrderCount = o.StoreOrders.Count,
@@ -300,7 +302,7 @@ public class OrderService : IOrderService
 
         // Roll up status for just this page (RollUpStatus is C#, not SQL-translatable).
         var items = rows.Select(r => new OrderSummaryResponse(
-            r.Id, r.OrderDate, RollUpStatus(r.Statuses), r.TotalAmount,
+            r.Id, r.CustomerEmail, r.OrderDate, RollUpStatus(r.Statuses), r.TotalAmount,
             r.StoreOrderCount, r.ItemCount, r.PaymentStatus)).ToList();
 
         return new PaginatedResult<OrderSummaryResponse>
@@ -370,6 +372,54 @@ public class OrderService : IOrderService
         await _context.SaveChangesAsync();
 
         return await BuildOrderResponseAsync(storeOrder.OrderId);
+    }
+
+    public async Task<OrderResponse> UpdateOrderStatusAsync(int orderId, UpdateOrderStatusRequest request)
+    {
+        // (1) Validate the requested status string (reuses the same validator as the per-slice path).
+        var validation = await _updateStatusValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new Buyit.Domain.Exceptions.ValidationException(errors);
+        }
+
+        // (2) Load the order with all its store-slices.
+        var order = await _context.Orders
+            .Include(o => o.StoreOrders)
+            .FirstOrDefaultAsync(o => o.Id == orderId);
+        if (order is null)
+            throw new NotFoundException($"Order with ID {orderId} was not found.");
+
+        var newStatus = Enum.Parse<OrderStatus>(request.Status, ignoreCase: true);
+
+        // (3) PRE-CHECK every slice: if any cannot legally reach newStatus, reject the whole call.
+        var blocked = new List<string>();
+        foreach (var so in order.StoreOrders)
+        {
+            if (so.Status == newStatus) continue;                       // already there -> nothing to do
+            if (!ValidProgressions[so.Status].Contains(newStatus))
+                blocked.Add($"Store-order #{so.Id} cannot transition from {so.Status} to {newStatus}.");
+        }
+        if (blocked.Count > 0)
+            throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+            {
+                ["status"] = blocked.ToArray()
+            });
+
+        // (4) APPLY to every slice (all transitions are known-valid now). Restock when cancelling.
+        foreach (var so in order.StoreOrders)
+        {
+            if (so.Status == newStatus) continue;
+            if (newStatus == OrderStatus.Cancelled)
+                await RestockStoreOrderAsync(so.Id);
+            so.Status = newStatus;
+        }
+
+        await _context.SaveChangesAsync();
+        return await BuildOrderResponseAsync(orderId);
     }
 
     // ---- helpers ----

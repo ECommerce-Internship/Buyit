@@ -120,6 +120,53 @@ public class OrderServiceTests
     );
 
     [Fact]
+    public async Task GetAllOrders_IncludesCustomerEmail()
+    {
+        var sut = BuildSut(out var db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 1 });
+        await db.SaveChangesAsync();
+        await sut.PlaceOrderAsync(userId, ValidShippingRequest());
+
+        var page = await sut.GetAllOrdersAsync(1, 10, status: null, from: null, to: null);
+
+        page.Items.Should().NotBeEmpty();
+        page.Items.First().CustomerEmail.Should().Be("order@buyit.com");
+    }
+
+    [Fact]
+    public async Task UpdateOrderStatus_ValidTransition_UpdatesAllStoreSlices()
+    {
+        var sut = BuildSut(out var db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 2 });
+        await db.SaveChangesAsync();
+        var placed = await sut.PlaceOrderAsync(userId, ValidShippingRequest());   // all slices Pending
+
+        var result = await sut.UpdateOrderStatusAsync(placed.OrderId, new UpdateOrderStatusRequest("Confirmed"));
+
+        result.Status.Should().Be("Confirmed");
+        var slices = await db.StoreOrders.Where(so => so.OrderId == placed.OrderId).ToListAsync();
+        slices.Should().OnlyContain(so => so.Status == OrderStatus.Confirmed);
+    }
+
+    [Fact]
+    public async Task UpdateOrderStatus_IllegalTransition_ThrowsValidationException()
+    {
+        var sut = BuildSut(out var db);
+        var (userId, cart, product, _) = await SeedOrderDataAsync(db, stock: 50);
+        db.CartItems.Add(new CartItem { CartId = cart.Id, ProductId = product.Id, Quantity = 2 });
+        await db.SaveChangesAsync();
+        var placed = await sut.PlaceOrderAsync(userId, ValidShippingRequest());   // slices Pending
+
+        // Pending -> Delivered is NOT a legal single hop (ValidProgressions), so it must be rejected.
+        Func<Task> act = async () =>
+            await sut.UpdateOrderStatusAsync(placed.OrderId, new UpdateOrderStatusRequest("Delivered"));
+
+        await act.Should().ThrowAsync<Buyit.Domain.Exceptions.ValidationException>();
+    }
+
+    [Fact]
     public async Task PlaceOrder_ValidCart_FansOutAndDeductsInventory()
     {
         var sut = BuildSut(out var db);
