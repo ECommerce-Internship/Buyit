@@ -43,6 +43,21 @@ public class AuthController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Upgrade the signed-in Customer to a Seller and open their first Pending store.
+    /// Returns fresh tokens carrying the new Seller role + storeIds.</summary>
+    [Authorize]
+    [HttpPost("become-seller")]
+    [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<AuthResponse>> BecomeSeller([FromBody] CreateStoreRequest request)
+    {
+        var userId = GetUserId();
+        var result = await _auth.BecomeSellerAsync(userId, request);
+        return Ok(result);
+    }
+
     /// <summary>Log in with email + password and receive tokens.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
