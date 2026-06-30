@@ -96,6 +96,32 @@ public class StoreServiceTests
     }
 
     [Fact]
+    public async Task GetStoresForUser_ReturnsOnlyThatUsersStores_AnyStatus()
+    {
+        var sut = BuildSut(out _);
+        var a = await sut.CreateStoreForUserAsync(1, "Alpha", null);   // user 1
+        await sut.CreateStoreForUserAsync(1, "Beta", null);            // user 1
+        await sut.CreateStoreForUserAsync(2, "Gamma", null);           // user 2
+        await sut.ApproveAsync(a.Id);                                  // Alpha approved -> still listed
+
+        var mine = await sut.GetStoresForUserAsync(1);
+
+        mine.Should().HaveCount(2);
+        mine.Select(s => s.Name).Should().BeEquivalentTo(new[] { "Alpha", "Beta" });
+        mine.Select(s => s.Name).Should().NotContain("Gamma");   // other user's store excluded
+    }
+
+    [Fact]
+    public async Task GetStoresForUser_NoStores_ReturnsEmpty()
+    {
+        var sut = BuildSut(out _);
+
+        var mine = await sut.GetStoresForUserAsync(99);
+
+        mine.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetBySlug_NotApproved_ThrowsNotFound()
     {
         var sut = BuildSut(out _);

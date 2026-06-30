@@ -35,6 +35,14 @@ public class StoresController : ControllerBase
         return CreatedAtAction(nameof(GetBySlug), new { slug = result.Slug, version = "1.0" }, result);
     }
 
+    /// <summary>The signed-in seller's (or admin's) own stores, any status, newest first.</summary>
+    [Authorize(Roles = "Seller,Admin")]
+    [HttpGet("mine")]
+    [ProducesResponseType(typeof(IReadOnlyList<StoreResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<IReadOnlyList<StoreResponse>>> GetMine()
+        => Ok(await _stores.GetStoresForUserAsync(GetUserId()));
+
     /// <summary>Public: view one approved store by its slug.</summary>
     [HttpGet("{slug}")]
     [ProducesResponseType(typeof(StoreResponse), StatusCodes.Status200OK)]

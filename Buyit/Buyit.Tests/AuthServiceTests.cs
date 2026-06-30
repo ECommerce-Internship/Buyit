@@ -38,6 +38,7 @@ public class AuthServiceTests
         // Real validators (they have no dependencies).
         var registerValidator = new RegisterRequestValidator();
         var registerSellerValidator = new RegisterSellerRequestValidator();
+        var createStoreValidator = new CreateStoreRequestValidator();
         var updateValidator = new UpdateProfileRequestValidator();
         var changeValidator = new ChangePasswordRequestValidator();
 
@@ -51,6 +52,7 @@ public class AuthServiceTests
             jwtMock.Object,
             registerValidator,
             registerSellerValidator,
+            createStoreValidator,
             updateValidator,
             changeValidator,
             jwtOptions,
@@ -251,5 +253,98 @@ public class AuthServiceTests
 
         // Assert
         await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    // -----------------------------------------------------------------
+    // TEST 7: A Customer becoming a seller is promoted to the Seller role,
+    //         gets a first Pending store, and receives Seller-role tokens.
+    // -----------------------------------------------------------------
+    [Fact]
+    public async Task BecomeSellerAsync_Customer_PromotesAndCreatesPendingStore()
+    {
+        // Arrange
+        var sut = BuildSut(out var db);
+        var user = new User
+        {
+            Email = "customer@example.com",
+            FirstName = "Cus",
+            LastName = "Tomer",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Password123", 12),
+            Role = UserRole.Customer
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var request = new CreateStoreRequest { StoreName = "Nova Tech", StoreDescription = "gadgets" };
+
+        // Act
+        AuthResponse result = await sut.BecomeSellerAsync(user.Id, request);
+
+        // Assert: response says Seller, DB role is upgraded, a Pending store now exists.
+        result.User.Role.Should().Be("Seller");
+        (await db.Users.FindAsync(user.Id))!.Role.Should().Be(UserRole.Seller);
+
+        var store = await db.Stores.FirstOrDefaultAsync(s => s.OwnerUserId == user.Id);
+        store.Should().NotBeNull();
+        store!.Status.Should().Be(StoreStatus.Pending);
+        store.Name.Should().Be("Nova Tech");
+    }
+
+    // -----------------------------------------------------------------
+    // TEST 8: A user who is already a Seller cannot "become a seller" again.
+    // -----------------------------------------------------------------
+    [Fact]
+    public async Task BecomeSellerAsync_AlreadySeller_ThrowsConflictException()
+    {
+        // Arrange
+        var sut = BuildSut(out var db);
+        var user = new User
+        {
+            Email = "seller@example.com",
+            FirstName = "Sell",
+            LastName = "Er",
+            PasswordHash = "irrelevant",
+            Role = UserRole.Seller
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var request = new CreateStoreRequest { StoreName = "Second Shop" };
+
+        // Act
+        Func<Task> act = async () => await sut.BecomeSellerAsync(user.Id, request);
+
+        // Assert
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    // -----------------------------------------------------------------
+    // TEST 9: An empty store name is a validation error (400), and the
+    //         caller's role is NOT changed.
+    // -----------------------------------------------------------------
+    [Fact]
+    public async Task BecomeSellerAsync_EmptyStoreName_ThrowsValidationException()
+    {
+        // Arrange
+        var sut = BuildSut(out var db);
+        var user = new User
+        {
+            Email = "customer2@example.com",
+            FirstName = "Cus",
+            LastName = "Two",
+            PasswordHash = "irrelevant",
+            Role = UserRole.Customer
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var request = new CreateStoreRequest { StoreName = "   " };
+
+        // Act
+        Func<Task> act = async () => await sut.BecomeSellerAsync(user.Id, request);
+
+        // Assert: rejected, and the account stays a Customer.
+        await act.Should().ThrowAsync<Buyit.Domain.Exceptions.ValidationException>();
+        (await db.Users.FindAsync(user.Id))!.Role.Should().Be(UserRole.Customer);
     }
 }

@@ -23,6 +23,7 @@ public class AuthService : IAuthService
     private readonly IJwtTokenService _tokens;
     private readonly IValidator<RegisterRequest> _registerValidator;
     private readonly IValidator<RegisterSellerRequest> _registerSellerValidator;
+    private readonly IValidator<CreateStoreRequest> _createStoreValidator;
     private readonly IValidator<UpdateProfileRequest> _updateProfileValidator;
     private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
     private readonly JwtSettings _jwt;
@@ -33,19 +34,21 @@ public class AuthService : IAuthService
       IJwtTokenService tokens,
       IValidator<RegisterRequest> registerValidator,
       IValidator<RegisterSellerRequest> registerSellerValidator,
+      IValidator<CreateStoreRequest> createStoreValidator,
       IValidator<UpdateProfileRequest> updateProfileValidator,
       IValidator<ChangePasswordRequest> changePasswordValidator,
       IOptions<JwtSettings> jwtOptions,
-      ILogger<AuthService> logger) 
+      ILogger<AuthService> logger)
     {
         _db = db;
         _tokens = tokens;
         _registerValidator = registerValidator;
         _registerSellerValidator = registerSellerValidator;
+        _createStoreValidator = createStoreValidator;
         _updateProfileValidator = updateProfileValidator;
         _changePasswordValidator = changePasswordValidator;
         _jwt = jwtOptions.Value;
-        _logger = logger; 
+        _logger = logger;
     }
 
     public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
@@ -137,6 +140,65 @@ public class AuthService : IAuthService
         _logger.LogInformation("Registered seller {UserId} with store {Slug}", user.Id, slug);
 
         // 4) Issue tokens. IssueTokensAsync loads user.Stores, so the JWT carries storeIds.
+        return await IssueTokensAsync(user);
+    }
+
+    public async Task<AuthResponse> BecomeSellerAsync(int userId, CreateStoreRequest request)
+    {
+        // 1) Validate the store fields with the SAME rules as opening any store -> 400 if bad.
+        var validation = await _createStoreValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller and their existing stores (the JWT "sub" claim was already
+        //    validated by the middleware, so userId is trustworthy).
+        var user = await _db.Users
+            .Include(u => u.Stores)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Only a Customer can be UPGRADED. A Seller already has a dashboard and should use
+        //    POST /Stores to open more stores; an Admin manages the platform. Reject clearly
+        //    (409) instead of silently re-promoting or creating a stray store.
+        if (user.Role != UserRole.Customer)
+            throw new ConflictException("Only customer accounts can be upgraded to a seller account.");
+
+        // 4) Promote the role AND open the first Pending store together, so a single
+        //    SaveChanges commits both in one transaction (atomic — no half-upgraded account).
+        var slug = await GenerateUniqueSlugAsync(request.StoreName);
+        user.Role = UserRole.Seller;
+        user.Stores.Add(new Store
+        {
+            Name = request.StoreName.Trim(),
+            Description = request.StoreDescription,
+            Slug = slug,
+            Status = StoreStatus.Pending,
+            CommissionRate = Buyit.Domain.Constants.MarketplaceDefaults.CommissionRate,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // Mirrors StoreService.CreateStoreForUserAsync: the slug check-then-insert can race, so
+        // the unique index is the real backstop. Map the Postgres unique-violation (23505) to a
+        // clean 409 instead of leaking a 500.
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
+        {
+            throw new ConflictException("A store with a conflicting slug already exists. Please try again.");
+        }
+
+        _logger.LogInformation("Upgraded user {UserId} to Seller with first store {Slug}", user.Id, slug);
+
+        // 5) Issue FRESH tokens so the new role + storeIds claim take effect immediately; the
+        //    caller's old (Customer) access token is replaced client-side via login(response).
         return await IssueTokensAsync(user);
     }
 
