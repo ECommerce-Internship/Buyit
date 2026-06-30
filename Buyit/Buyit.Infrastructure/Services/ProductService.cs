@@ -672,6 +672,7 @@ public class ProductService : IProductService
                     Sku = sku,
                     Price = price,
                     CategoryId = categoryId,
+                    StoreId = 1,
                     CreatedAt = DateTime.UtcNow,
                     IsDeleted = false,
                     Inventory = new Inventory { QuantityInStock = initialStock }

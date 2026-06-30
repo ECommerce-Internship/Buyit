@@ -74,6 +74,17 @@ public class StoreService : IStoreService
     private static bool IsUniqueViolation(DbUpdateException ex) =>
         ex.InnerException is Npgsql.PostgresException { SqlState: "23505" };
 
+    public async Task<IReadOnlyList<StoreResponse>> GetStoresForUserAsync(int ownerUserId)
+    {
+        // Every store this user owns, regardless of status (unlike GetBySlug which is
+        // Approved-only). Materialize first, THEN map — EF can't translate Map(...) to SQL.
+        var stores = await _db.Stores
+            .Where(s => s.OwnerUserId == ownerUserId)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+        return stores.Select(Map).ToList();
+    }
+
     public async Task<IReadOnlyList<StoreResponse>> GetPendingStoresAsync()
     {
         // Materialize first, THEN map: EF Core can't translate the Map(...) call to SQL.
