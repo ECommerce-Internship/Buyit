@@ -273,7 +273,8 @@ public class ProductService : IProductService
                 StoreName = p.Store.Name,
                 StoreSlug = p.Store.Slug,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewCount = p.Reviews.Count
             })
             .ToListAsync();
 
