@@ -43,6 +43,9 @@ public class Order
     [Required, MaxLength(100)]
     public string ShippingCountry { get; set; } = string.Empty;
 
+    [Required, MaxLength(100)]
+    public string ShippingState { get; set; } = string.Empty;
+
     // Each order belongs to one user.
     public int UserId { get; set; }
     public User User { get; set; } = null!;

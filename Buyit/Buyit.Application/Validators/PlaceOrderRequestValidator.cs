@@ -16,8 +16,12 @@ public class PlaceOrderRequestValidator : AbstractValidator<PlaceOrderRequest>
             .When(x => x.ShippingLine2 != null);
 
         RuleFor(x => x.ShippingCity)
-            .NotEmpty().WithMessage("City is required.")
-            .MaximumLength(100).WithMessage("City must not exceed 100 characters.");
+        .NotEmpty().WithMessage("City is required.")
+        .MaximumLength(100).WithMessage("City must not exceed 100 characters.");
+
+        RuleFor(x => x.ShippingState)
+            .NotEmpty().WithMessage("State / region is required.")
+            .MaximumLength(100).WithMessage("State / region must not exceed 100 characters.");
 
         RuleFor(x => x.ShippingPostalCode)
             .NotEmpty().WithMessage("Postal code is required.")

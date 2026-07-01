@@ -98,6 +98,7 @@ public class OrderService : IOrderService
                 ShippingLine1 = request.ShippingLine1,
                 ShippingLine2 = request.ShippingLine2,
                 ShippingCity = request.ShippingCity,
+                ShippingState = request.ShippingState,
                 ShippingPostalCode = request.ShippingPostalCode,
                 ShippingCountry = request.ShippingCountry,
                 CouponId = coupon?.Id
@@ -412,7 +413,7 @@ public class OrderService : IOrderService
         RollUpStatus(order.StoreOrders.Select(so => so.Status)),
         order.TotalAmount,
         order.DiscountAmount,
-        order.ShippingLine1, order.ShippingLine2, order.ShippingCity,
+        order.ShippingLine1, order.ShippingLine2, order.ShippingCity, order.ShippingState,
         order.ShippingPostalCode, order.ShippingCountry,
         order.Payment != null ? order.Payment.Status.ToString() : null,
         order.StoreOrders.Select(so => new StoreOrderResponse(
