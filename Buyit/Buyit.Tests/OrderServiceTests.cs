@@ -115,6 +115,7 @@ public class OrderServiceTests
         "verdun, abc mall street etc..",
         null,
         "Beirut",
+        "Mount Lebanon",
         "1100",
         "Lebanon"
     );

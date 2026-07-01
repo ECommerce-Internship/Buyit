@@ -5,6 +5,7 @@ public record PlaceOrderRequest(
     string ShippingLine1,
     string? ShippingLine2,
     string ShippingCity,
+    string ShippingState,
     string ShippingPostalCode,
     string ShippingCountry
 );

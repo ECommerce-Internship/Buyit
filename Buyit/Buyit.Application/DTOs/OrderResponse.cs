@@ -12,6 +12,7 @@ public record OrderResponse(
     string? ShippingLine2,
     string ShippingCity,
     string ShippingPostalCode,
+    string ShippingState,
     string ShippingCountry,
     string? PaymentStatus,
     IEnumerable<StoreOrderResponse> StoreOrders
