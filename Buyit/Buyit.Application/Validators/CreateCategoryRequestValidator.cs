@@ -9,8 +9,7 @@ public class CreateCategoryRequestValidator : AbstractValidator<CreateCategoryRe
     {
         RuleFor(x => x.Name)
             .NotEmpty().WithMessage("Category name is required.")
-            .MaximumLength(100).WithMessage("Category name cannot exceed 100 characters.");
-
+            .MaximumLength(150).WithMessage("Category name cannot exceed 150 characters.");
         RuleFor(x => x.Description)
             .MaximumLength(1000).WithMessage("Description cannot exceed 1000 characters.");
 

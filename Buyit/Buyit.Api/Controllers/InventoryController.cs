@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Buyit.Application.Interfaces;
+using Buyit.Application.DTOs;
 
 namespace Buyit.Api.Controllers;
 
@@ -38,6 +39,15 @@ public class InventoryController : ControllerBase
     public async Task<IActionResult> UpdateStock(int productId, [FromBody] int newQuantity)
     {
         var inventory = await _inventoryService.UpdateStockAsync(productId, newQuantity);
+        return Ok(inventory);
+    }
+
+    // PUT api/v1/inventory/{productId}  — friendlier alias matching the TB-66 ticket URL.
+    // Body: { "quantity": 42 }. Delegates to the same service method as /{id}/stock.
+    [HttpPut("{productId:int}")]
+    public async Task<IActionResult> UpdateStockByProduct(int productId, [FromBody] UpdateStockRequest request)
+    {
+        var inventory = await _inventoryService.UpdateStockAsync(productId, request.Quantity);
         return Ok(inventory);
     }
 

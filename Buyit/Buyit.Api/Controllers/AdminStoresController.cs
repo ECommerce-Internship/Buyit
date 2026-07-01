@@ -21,6 +21,12 @@ public class AdminStoresController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<StoreResponse>>> Pending()
         => Ok(await _stores.GetPendingStoresAsync());
 
+    /// <summary>List every store (any status). Admin only. Used to populate pickers.</summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<StoreResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<StoreResponse>>> GetAll()
+        => Ok(await _stores.GetAllStoresAsync());
+
     [HttpPut("{id:int}/approve")]
     [ProducesResponseType(typeof(StoreResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

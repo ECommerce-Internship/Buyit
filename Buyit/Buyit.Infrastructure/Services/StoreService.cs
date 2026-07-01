@@ -89,8 +89,20 @@ public class StoreService : IStoreService
     {
         // Materialize first, THEN map: EF Core can't translate the Map(...) call to SQL.
         var stores = await _db.Stores
+            .Include(s => s.Owner)
             .Where(s => s.Status == StoreStatus.Pending)
             .OrderBy(s => s.CreatedAt)
+            .ToListAsync();
+        return stores.Select(Map).ToList();
+    }
+
+    public async Task<IReadOnlyList<StoreResponse>> GetAllStoresAsync()
+    {
+        // No .Where(...) filter — we want every store, any status. Order by name so the
+        // dropdown reads alphabetically. Materialize first, THEN Map (same reason as above).
+        var stores = await _db.Stores
+            .Include(s => s.Owner)
+            .OrderBy(s => s.Name)
             .ToListAsync();
         return stores.Select(Map).ToList();
     }
@@ -141,6 +153,7 @@ public class StoreService : IStoreService
         Slug = s.Slug,
         Description = s.Description,
         Status = s.Status.ToString(),
-        CreatedAt = s.CreatedAt
+        CreatedAt = s.CreatedAt,
+        OwnerName = s.Owner is null ? null : $"{s.Owner.FirstName} {s.Owner.LastName}".Trim()
     };
 }

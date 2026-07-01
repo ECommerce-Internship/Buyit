@@ -121,4 +121,20 @@ public class DashboardServiceTests
         sellerATop.Should().ContainSingle()
                   .Which.ProductName.Should().Be("A-prod");   // only their own
     }
+
+    [Fact]
+    public async Task GetAdminDashboard_ReturnsAllSections()
+    {
+        var sut = BuildSut(out var db);
+        await SeedAsync(db);
+
+        var result = await sut.GetAdminDashboardAsync("month");
+
+        result.Should().NotBeNull();
+        result.Summary.Should().NotBeNull();
+        result.Revenue.Should().NotBeNull();
+        result.OrdersByStatus.Should().NotBeNull();
+        result.TopProducts.Should().NotBeNull();
+        result.NewCustomers.Should().NotBeNull();
+    }
 }
