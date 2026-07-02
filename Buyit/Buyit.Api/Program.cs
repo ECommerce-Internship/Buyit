@@ -8,10 +8,14 @@ using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
 using Buyit.Infrastructure.Data;
+using Buyit.Infrastructure.Mcp;
 using Buyit.Infrastructure.Services;
 using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Globalization;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
@@ -124,6 +128,7 @@ builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRe
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+builder.Services.AddScoped<IConversationStore, RedisConversationStore>();
 
 // --- TB-43: Azure Queue + SendGrid registrations ---
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
@@ -142,6 +147,52 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+
+// --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
+builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
+builder.Services.Configure<ChatHistorySettings>(builder.Configuration.GetSection("ChatHistory"));
+builder.Services.AddScoped<IMcpConnector, McpConnector>();
+builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
+builder.Services.AddScoped<IChatService, ChatService>();
+
+// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle the
+// "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
+// caller's "sub" claim, no queue (excess -> 429). Uses AddPolicy so we can partition by user —
+// AddSlidingWindowLimiter alone would create a single shared bucket. No new libraries: this is
+// the built-in System.Threading.RateLimiting / Microsoft.AspNetCore.RateLimiting.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // On a 429, tell the client when it may retry (RFC 9110 §10.2.3) so well-behaved callers
+    // back off instead of hammering. The sliding-window limiter exposes this via lease metadata.
+    options.OnRejected = (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)retryAfter.TotalSeconds).ToString(NumberFormatInfo.InvariantInfo);
+        return ValueTask.CompletedTask;
+    };
+
+    options.AddPolicy("chat", httpContext =>
+    {
+        // One bucket per authenticated user. This limiter runs AFTER UseAuthorization (see the
+        // pipeline below), so "sub" is always populated for chat; fall back to the client IP
+        // (then a constant) so a missing key can never merge all callers into a shared bucket.
+        var partitionKey = httpContext.User?.FindFirst("sub")?.Value
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous";
+
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+            new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 10,                       // 10 requests...
+                Window = TimeSpan.FromMinutes(1),       // ...per rolling minute...
+                SegmentsPerWindow = 6,                  // ...checked in 10-second slices (smooth)
+                QueueLimit = 0                          // no waiting room: excess -> immediate 429
+            });
+    });
+});
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
@@ -249,6 +300,7 @@ app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
 app.UseRouting();
 app.UseAuthentication();    // identify who the user is (reads & validates the token)
 app.UseAuthorization();     // authorization checks based on claims/roles
+app.UseRateLimiter();       // enforce per-endpoint rate limits (e.g. the "chat" policy)
 
 app.MapControllers();       // route requests to your controllers
 

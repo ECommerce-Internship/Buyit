@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Buyit.Infrastructure\Buyit.Infrastructure.csproj" />
+    <ProjectReference Include="..\Buyit.MCP\Buyit.MCP.csproj" />
   </ItemGroup>
 
   <ItemGroup>
