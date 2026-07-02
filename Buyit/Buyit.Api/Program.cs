@@ -14,6 +14,7 @@ using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
@@ -151,16 +152,32 @@ builder.Services.AddScoped<IMcpConnector, McpConnector>();
 builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
 builder.Services.AddScoped<IChatService, ChatService>();
 
-// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle
-// the "chat" endpoint: at most 10 requests/minute per server, no queue (excess -> 429).
+// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle the
+// "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
+// caller's "sub" claim, no queue (excess -> 429). Uses AddPolicy so we can partition by user —
+// AddSlidingWindowLimiter alone would create a single shared bucket. No new libraries: this is
+// the built-in System.Threading.RateLimiting / Microsoft.AspNetCore.RateLimiting.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter("chat", limiter =>
+
+    options.AddPolicy("chat", httpContext =>
     {
-        limiter.PermitLimit = 10;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
+        // One bucket per authenticated user. Chat is [Authorize]d, so "sub" is always present;
+        // fall back to the client IP (then a constant) so a missing key can never merge all
+        // callers into a single shared bucket.
+        var partitionKey = httpContext.User?.FindFirst("sub")?.Value
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous";
+
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+            new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 10,                       // 10 requests...
+                Window = TimeSpan.FromMinutes(1),       // ...per rolling minute...
+                SegmentsPerWindow = 6,                  // ...checked in 10-second slices (smooth)
+                QueueLimit = 0                          // no waiting room: excess -> immediate 429
+            });
     });
 });
 
