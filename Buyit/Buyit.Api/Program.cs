@@ -14,6 +14,7 @@ using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -161,11 +162,21 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // On a 429, tell the client when it may retry (RFC 9110 §10.2.3) so well-behaved callers
+    // back off instead of hammering. The sliding-window limiter exposes this via lease metadata.
+    options.OnRejected = (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)retryAfter.TotalSeconds).ToString(NumberFormatInfo.InvariantInfo);
+        return ValueTask.CompletedTask;
+    };
+
     options.AddPolicy("chat", httpContext =>
     {
-        // One bucket per authenticated user. Chat is [Authorize]d, so "sub" is always present;
-        // fall back to the client IP (then a constant) so a missing key can never merge all
-        // callers into a single shared bucket.
+        // One bucket per authenticated user. This limiter runs AFTER UseAuthorization (see the
+        // pipeline below), so "sub" is always populated for chat; fall back to the client IP
+        // (then a constant) so a missing key can never merge all callers into a shared bucket.
         var partitionKey = httpContext.User?.FindFirst("sub")?.Value
             ?? httpContext.Connection.RemoteIpAddress?.ToString()
             ?? "anonymous";
