@@ -43,6 +43,8 @@ public class ChatService : IChatService
     private readonly IMcpConnector _mcpConnector;
     private readonly IValidator<ChatRequest> _validator;
     private readonly ICurrentUserService _currentUser;
+    private readonly IConversationStore _conversationStore;
+    private readonly ChatHistorySettings _historySettings;
     private readonly ILogger<ChatService> _logger;
 
     public ChatService(
@@ -51,6 +53,8 @@ public class ChatService : IChatService
         IMcpConnector mcpConnector,
         IValidator<ChatRequest> validator,
         ICurrentUserService currentUser,
+        IConversationStore conversationStore,
+        IOptions<ChatHistorySettings> historyOptions,
         ILogger<ChatService> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -58,6 +62,8 @@ public class ChatService : IChatService
         _mcpConnector = mcpConnector;
         _validator = validator;
         _currentUser = currentUser;
+        _conversationStore = conversationStore;
+        _historySettings = historyOptions.Value;
         _logger = logger;
     }
 
@@ -80,10 +86,14 @@ public class ChatService : IChatService
             ?? throw new UnauthorizedException("You must be signed in to use the assistant.");
         var callerRole = _currentUser.Role;
 
-        // New conversations get a fresh id (real cross-request memory arrives in a later ticket).
+        // New conversations get a fresh id; an existing id continues that conversation's memory.
         var conversation = string.IsNullOrWhiteSpace(request.conversationId)
             ? Guid.NewGuid().ToString()
             : request.conversationId;
+
+        // Load this user's prior turns for this conversation (empty if new / Redis down). Scoped by
+        // callerId, so another user's conversationId can never resolve to this user's history.
+        var history = await _conversationStore.GetAsync(conversation, callerId, cancellationToken);
 
         // 1) Connect to the MCP server and learn its tools (Parts 3 & 4).
         //    'await using' guarantees the child process is shut down when we leave this method.
@@ -92,11 +102,11 @@ public class ChatService : IChatService
         var allowedTools = GetToolsForRole(callerRole, allTools);
         var toolsPayload = BuildToolsPayload(allowedTools);
 
-        // 2) Seed the conversation with the user's message.
-        var contents = new List<object>
-        {
-            new { role = "user", parts = new object[] { new { text = request.message } } }
-        };
+        // 2) Seed the conversation: prior turns first (so Gemini has context), then the new message.
+        var contents = new List<object>();
+        foreach (var turn in history)
+            contents.Add(new { role = turn.Role, parts = new object[] { new { text = turn.Text } } });
+        contents.Add(new { role = "user", parts = new object[] { new { text = request.message } } });
 
         // Remembers the most recent tool output, surfaced if we hit the round cap.
         var lastToolOutput = string.Empty;
@@ -145,6 +155,7 @@ public class ChatService : IChatService
                 var reply = string.IsNullOrWhiteSpace(textAnswer)
                     ? "Sorry, I couldn't produce an answer."
                     : textAnswer!;
+                await PersistTurnAsync(conversation, callerId, history, request.message, reply, cancellationToken);
                 return new ChatResponse(reply, conversation);
             }
 
@@ -191,11 +202,32 @@ public class ChatService : IChatService
         // 4) We used all rounds and Gemini still wanted tools. Return what we gathered.
         _logger.LogInformation(
             "Chat loop hit the {Cap}-round tool cap for conversation {Id}.", MaxToolRounds, conversation);
-        return new ChatResponse(
-            string.IsNullOrWhiteSpace(lastToolOutput)
-                ? "I gathered some information but couldn't fully finish. Please try rephrasing."
-                : $"I gathered some information but couldn't fully finish. Here's what I found so far: {lastToolOutput}",
-            conversation);
+        var cappedReply = string.IsNullOrWhiteSpace(lastToolOutput)
+            ? "I gathered some information but couldn't fully finish. Please try rephrasing."
+            : $"I gathered some information but couldn't fully finish. Here's what I found so far: {lastToolOutput}";
+        await PersistTurnAsync(conversation, callerId, history, request.message, cappedReply, cancellationToken);
+        return new ChatResponse(cappedReply, conversation);
+    }
+
+    // Appends this exchange to the history, trims to the last N turns (windowing), and saves.
+    private async Task PersistTurnAsync(
+        string conversationId, int userId, List<ConversationTurn> history,
+        string userMessage, string modelReply, CancellationToken cancellationToken)
+    {
+        history.Add(new ConversationTurn("user", userMessage));
+        history.Add(new ConversationTurn("model", modelReply));
+
+        // Windowing: keep only the most recent MaxTurns so Gemini's context stays bounded. Remove an
+        // EVEN number of turns so the window never starts with a dangling "model" turn (Gemini
+        // requires the first content to be a "user" turn) — matters when MaxTurns is odd.
+        if (history.Count > _historySettings.MaxTurns)
+        {
+            var toRemove = history.Count - _historySettings.MaxTurns;
+            if (toRemove % 2 != 0) toRemove++;
+            history.RemoveRange(0, toRemove);
+        }
+
+        await _conversationStore.SaveAsync(conversationId, userId, history, cancellationToken);
     }
 
     // Rule 2 — role-based tool filtering. Admin sees everything; everyone else gets the

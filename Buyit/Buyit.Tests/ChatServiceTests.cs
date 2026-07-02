@@ -151,7 +151,9 @@ public class ChatServiceTests
         Mock<HttpMessageHandler> handler,
         Mock<IMcpConnector> mcpConnector,
         Mock<IValidator<ChatRequest>>? validator = null,
-        Mock<ICurrentUserService>? currentUser = null)
+        Mock<ICurrentUserService>? currentUser = null,
+        Mock<IConversationStore>? conversationStore = null,
+        int maxTurns = 20)
     {
         var httpClient = new HttpClient(handler.Object)
         {
@@ -163,12 +165,22 @@ public class ChatServiceTests
         var settings = Options.Create(new GeminiSettings { ApiKey = "test", Model = "gemini-2.5-flash" });
         var logger = new Mock<ILogger<ChatService>>();
 
+        var store = conversationStore ?? new Mock<IConversationStore>();
+        // Only add a default (empty-history) setup when WE created the mock — otherwise we'd clobber
+        // the caller's own GetAsync setup (last Moq setup wins).
+        if (conversationStore is null)
+            store.Setup(s => s.GetAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(new List<ConversationTurn>());
+        var historyOptions = Options.Create(new ChatHistorySettings { TtlHours = 24, MaxTurns = maxTurns });
+
         return new ChatService(
             factory.Object,
             settings,
             mcpConnector.Object,
             (validator ?? PassingValidator()).Object,
             (currentUser ?? FakeUser()).Object,
+            store.Object,
+            historyOptions,
             logger.Object);
     }
 
@@ -553,5 +565,66 @@ public class ChatServiceTests
         payload.Should().Contain("view_cart");
         payload.Should().Contain("get_my_orders");
         payload.Should().NotContain("get_dashboard_summary");   // admin tool still hidden
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_LoadsPriorHistory_AndSavesNewTurn()
+    {
+        // Prior history: the user asked about laptops and the bot answered.
+        var store = new Mock<IConversationStore>();
+        store.Setup(s => s.GetAsync("convo-1", 42, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new List<ConversationTurn>
+             {
+                 new("user", "what laptops do you have?"),
+                 new("model", "We have the Pro 14 and the Air 13."),
+             });
+
+        // Gemini answers directly (no tool call).
+        var handler = CapturingHandler(out var sentBody, (HttpStatusCode.OK, TextEnvelope("The Pro 14 has 32GB RAM.")));
+        var connector = ConnectorReturning(RunnerWithTools());
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 42, role: "Customer"),
+                           conversationStore: store);
+
+        var result = await sut.SendMessageAsync(new ChatRequest("tell me more about the first one", "convo-1"));
+
+        // 1) Prior turns were sent to Gemini (context is present).
+        sentBody.ToString().Should().Contain("what laptops do you have?");
+
+        // 2) The new exchange was persisted (user message + model reply appended).
+        store.Verify(s => s.SaveAsync("convo-1", 42,
+            It.Is<IReadOnlyList<ConversationTurn>>(h =>
+                h.Any(t => t.Role == "user" && t.Text == "tell me more about the first one") &&
+                h.Any(t => t.Role == "model" && t.Text == "The Pro 14 has 32GB RAM.")),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_OddMaxTurns_WindowStillStartsWithUserTurn()
+    {
+        // 3 prior pairs (6 turns) + this exchange (2) = 8, trimmed to an ODD MaxTurns of 3.
+        // Naive trimming would leave a leading "model" turn; the pair-aware trim must not.
+        var prior = new List<ConversationTurn>();
+        for (var i = 0; i < 3; i++)
+        {
+            prior.Add(new ConversationTurn("user", $"q{i}"));
+            prior.Add(new ConversationTurn("model", $"a{i}"));
+        }
+        var store = new Mock<IConversationStore>();
+        store.Setup(s => s.GetAsync("convo-1", 42, It.IsAny<CancellationToken>())).ReturnsAsync(prior);
+
+        List<ConversationTurn>? saved = null;
+        store.Setup(s => s.SaveAsync("convo-1", 42, It.IsAny<IReadOnlyList<ConversationTurn>>(), It.IsAny<CancellationToken>()))
+             .Callback<string, int, IReadOnlyList<ConversationTurn>, CancellationToken>((_, _, h, _) => saved = h.ToList());
+
+        var handler = HandlerSequence((HttpStatusCode.OK, TextEnvelope("ok")));
+        var connector = ConnectorReturning(RunnerWithTools());
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 42, role: "Customer"),
+                           conversationStore: store, maxTurns: 3);
+
+        await sut.SendMessageAsync(new ChatRequest("hello", "convo-1"));
+
+        saved.Should().NotBeNull();
+        saved!.First().Role.Should().Be("user");   // never a dangling leading "model" turn
+        saved!.Count.Should().BeLessThanOrEqualTo(4);   // even trim keeps it bounded (~MaxTurns)
     }
 }

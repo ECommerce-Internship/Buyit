@@ -128,6 +128,7 @@ builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRe
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+builder.Services.AddScoped<IConversationStore, RedisConversationStore>();
 
 // --- TB-43: Azure Queue + SendGrid registrations ---
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
@@ -149,6 +150,7 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
 builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
+builder.Services.Configure<ChatHistorySettings>(builder.Configuration.GetSection("ChatHistory"));
 builder.Services.AddScoped<IMcpConnector, McpConnector>();
 builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
 builder.Services.AddScoped<IChatService, ChatService>();
