@@ -18,10 +18,28 @@ public class ChatService : IChatService
     // Hard cap on Gemini<->tool round-trips per message, so the loop always terminates.
     private const int MaxToolRounds = 5;
 
+    // Tools a non-admin (Customer/Seller) may use. Everything not listed here is admin-only.
+    // Allowlist, not blocklist: a newly-added tool is denied to customers until explicitly added.
+    private static readonly HashSet<string> NonAdminTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "search_products",       // public catalogue search — safe
+        "get_product",           // single product details — safe
+        "get_customer_orders",   // a user's OWN orders — safe once we inject their id
+    };
+
+    // Argument names the model must NEVER control (the CALLER's own identity). We delete these
+    // from model output and, where a tool needs identity, set them ourselves from the JWT.
+    // Note: 'sellerUserId' is deliberately NOT here — it is a filter argument on the admin-only
+    // get_dashboard_summary tool, not the caller's identity. Stripping it would silently force
+    // admins' per-store dashboard queries back to platform-wide. If a sellerUserId-taking tool
+    // is ever added to NonAdminTools, re-scope it explicitly in ApplyServerSideIdentity.
+    private static readonly string[] IdentityArgKeys = { "userId", "isAdmin" };
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GeminiSettings _geminiSettings;
     private readonly IMcpConnector _mcpConnector;
     private readonly IValidator<ChatRequest> _validator;
+    private readonly ICurrentUserService _currentUser;
     private readonly ILogger<ChatService> _logger;
 
     public ChatService(
@@ -29,12 +47,14 @@ public class ChatService : IChatService
         IOptions<GeminiSettings> geminiOptions,
         IMcpConnector mcpConnector,
         IValidator<ChatRequest> validator,
+        ICurrentUserService currentUser,
         ILogger<ChatService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _geminiSettings = geminiOptions.Value;
         _mcpConnector = mcpConnector;
         _validator = validator;
+        _currentUser = currentUser;
         _logger = logger;
     }
 
@@ -51,6 +71,12 @@ public class ChatService : IChatService
             throw new ValidationException(errors);
         }
 
+        // Identity comes ONLY from the JWT. [Authorize] on the controller should guarantee a user,
+        // but we fail closed if it's ever missing rather than silently trusting a default.
+        var callerId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to use the assistant.");
+        var callerRole = _currentUser.Role;
+
         // New conversations get a fresh id (real cross-request memory arrives in a later ticket).
         var conversation = string.IsNullOrWhiteSpace(request.conversationId)
             ? Guid.NewGuid().ToString()
@@ -58,9 +84,10 @@ public class ChatService : IChatService
 
         // 1) Connect to the MCP server and learn its tools (Parts 3 & 4).
         //    'await using' guarantees the child process is shut down when we leave this method.
-        await using var mcp = await _mcpConnector.ConnectAsync(cancellationToken);
-        var tools = await mcp.ListToolsAsync(cancellationToken);
-        var toolsPayload = BuildToolsPayload(tools);
+        await using var mcp = await _mcpConnector.ConnectAsync(callerId, callerRole, cancellationToken);
+        var allTools = await mcp.ListToolsAsync(cancellationToken);
+        var allowedTools = GetToolsForRole(callerRole, allTools);
+        var toolsPayload = BuildToolsPayload(allowedTools);
 
         // 2) Seed the conversation with the user's message.
         var contents = new List<object>
@@ -120,6 +147,20 @@ public class ChatService : IChatService
 
             // 3b) A tool was requested. Echo the model's functionCall turn back into history.
             var toolName = functionCall.GetProperty("name").GetString() ?? string.Empty;
+
+            // Defence in depth. Only reject with 403 when the tool REALLY EXISTS but was filtered
+            // out for this role — that is a genuine authorization boundary. A name that exists for
+            // nobody is a model hallucination, not a permissions issue, so let it fall through to
+            // CallMcpToolAsync and surface as a 502 (unchanged from before).
+            var isRealTool = allTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            var isAllowed = allowedTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            if (isRealTool && !isAllowed)
+            {
+                _logger.LogWarning(
+                    "Model requested tool '{Tool}' not permitted for role '{Role}'.", toolName, callerRole);
+                throw new ForbiddenException($"The tool '{toolName}' is not available to you.");
+            }
+
             var toolArgs = functionCall.TryGetProperty("args", out var a) ? a : default;
 
             contents.Add(new
@@ -129,7 +170,7 @@ public class ChatService : IChatService
             });
 
             // 3c) Run the real tool via MCP and add its result as a functionResponse turn.
-            var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, cancellationToken);
+            var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, callerId, cancellationToken);
             lastToolOutput = toolOutput;
 
             contents.Add(new
@@ -152,6 +193,19 @@ public class ChatService : IChatService
                 ? "I gathered some information but couldn't fully finish. Please try rephrasing."
                 : $"I gathered some information but couldn't fully finish. Here's what I found so far: {lastToolOutput}",
             conversation);
+    }
+
+    // Rule 2 — role-based tool filtering. Admin sees everything; everyone else gets the
+    // safe subset. The model literally cannot request a tool that isn't in this list.
+    private static IReadOnlyList<McpToolDescriptor> GetToolsForRole(
+        string? role, IReadOnlyList<McpToolDescriptor> allTools)
+    {
+        if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
+            return allTools;
+
+        return allTools
+            .Where(tool => NonAdminTools.Contains(tool.Name))
+            .ToList();
     }
 
     // Copies only the schema keywords Gemini understands, recursing into nested schemas.
@@ -306,11 +360,12 @@ public class ChatService : IChatService
 
     // Runs one MCP tool and returns its text output. Wraps failures as ExternalServiceException.
     private async Task<string> CallMcpToolAsync(
-        IMcpToolRunner mcp, string toolName, JsonElement args, CancellationToken cancellationToken)
+        IMcpToolRunner mcp, string toolName, JsonElement args, int callerId, CancellationToken cancellationToken)
     {
         try
         {
-            var arguments = ArgsToDictionary(args);
+            var rawArgs = ArgsToDictionary(args);
+            var arguments = ApplyServerSideIdentity(toolName, rawArgs, callerId);
             return await mcp.CallToolAsync(toolName, arguments, cancellationToken);
         }
         catch (ExternalServiceException)
@@ -322,6 +377,39 @@ public class ChatService : IChatService
             _logger.LogWarning(ex, "MCP tool '{Tool}' failed.", toolName);
             throw new ExternalServiceException($"The tool '{toolName}' failed to run.", ex);
         }
+    }
+
+    // Rule 1 — remove any identity args the model produced, then stamp in the real identity
+    // from the JWT for the tools that need it. The model can never widen its own access.
+    private IReadOnlyDictionary<string, object?> ApplyServerSideIdentity(
+        string toolName, IReadOnlyDictionary<string, object?> modelArgs, int callerId)
+    {
+        // 1) Start from the model's args but DROP every identity-related key.
+        var safeArgs = modelArgs
+            .Where(kv => !IdentityArgKeys.Contains(kv.Key, StringComparer.OrdinalIgnoreCase))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        // 2) Stamp in the trusted identity for the tools that require it.
+        switch (toolName.ToLowerInvariant())
+        {
+            case "get_customer_orders":
+                // A customer's own order history — always self-scoped to the JWT's user.
+                safeArgs["userId"] = callerId;
+                break;
+
+            case "get_order":
+                // Look-up by order id: pass the real id + real admin flag so OrderService's
+                // ownership check (if (!isAdmin && order.UserId != userId) -> Forbidden) is honoured.
+                safeArgs["userId"] = callerId;
+                safeArgs["isAdmin"] = _currentUser.IsAdmin;
+                break;
+
+            // Other tools (search_products, get_product, get_low_stock_products,
+            // get_dashboard_summary, generate_product_content) take no per-user identity arg,
+            // so there is nothing to inject — the stripping above already removed any the model tried.
+        }
+
+        return safeArgs;
     }
 
     // Converts Gemini's functionCall.args JSON object into the dictionary CallToolAsync wants.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Buyit.Application.Common;
 using Buyit.Domain.Exceptions;
 using Microsoft.Extensions.Logging;
@@ -19,7 +20,7 @@ public class McpConnector : IMcpConnector
         _logger = logger;
     }
 
-    public async Task<IMcpToolRunner> ConnectAsync(CancellationToken cancellationToken)
+    public async Task<IMcpToolRunner> ConnectAsync(int callerId, string? callerRole, CancellationToken cancellationToken)
     {
         try
         {
@@ -33,7 +34,16 @@ public class McpConnector : IMcpConnector
             {
                 Name = "Buyit.MCP",
                 Command = _mcpSettings.Command,
-                Arguments = arguments
+                Arguments = arguments,
+                // Forward the authenticated caller's identity to the child process. InheritEnvironmentVariables
+                // defaults to true, so these are layered ON TOP of the inherited env (PATH, connection strings,
+                // etc.) — never use null as a value, which would REMOVE a variable. The MCP server's
+                // McpCurrentUserService reads these so its tools act as the real caller, not a hardcoded admin.
+                EnvironmentVariables = new Dictionary<string, string?>
+                {
+                    ["BUYIT_CALLER_USERID"] = callerId.ToString(CultureInfo.InvariantCulture),
+                    ["BUYIT_CALLER_ROLE"] = callerRole ?? string.Empty
+                }
             });
 
             var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
