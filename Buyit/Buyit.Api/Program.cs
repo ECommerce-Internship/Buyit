@@ -8,10 +8,12 @@ using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
 using Buyit.Infrastructure.Data;
+using Buyit.Infrastructure.Mcp;
 using Buyit.Infrastructure.Services;
 using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
@@ -143,6 +145,25 @@ builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
+// --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
+builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
+builder.Services.AddScoped<IMcpConnector, McpConnector>();
+builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
+builder.Services.AddScoped<IChatService, ChatService>();
+
+// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle
+// the "chat" endpoint: at most 10 requests/minute per server, no queue (excess -> 429).
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddFixedWindowLimiter("chat", limiter =>
+    {
+        limiter.PermitLimit = 10;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+});
+
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
 
@@ -249,6 +270,7 @@ app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
 app.UseRouting();
 app.UseAuthentication();    // identify who the user is (reads & validates the token)
 app.UseAuthorization();     // authorization checks based on claims/roles
+app.UseRateLimiter();       // enforce per-endpoint rate limits (e.g. the "chat" policy)
 
 app.MapControllers();       // route requests to your controllers
 
