@@ -24,7 +24,10 @@ public class ChatService : IChatService
     {
         "search_products",       // public catalogue search — safe
         "get_product",           // single product details — safe
-        "get_customer_orders",   // a user's OWN orders — safe once we inject their id
+        "get_customer_orders",   // legacy self-scoped orders (kept; get_my_orders is preferred)
+        "get_my_orders",         // TB-100: self-scoped order history (no userId param)
+        "add_to_cart",           // TB-100: adds to the caller's own cart
+        "view_cart",             // TB-100: reads the caller's own cart
     };
 
     // Argument names the model must NEVER control (the CALLER's own identity). We delete these

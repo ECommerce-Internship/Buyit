@@ -531,4 +531,27 @@ public class ChatServiceTests
 
         await act.Should().ThrowAsync<ExternalServiceException>();
     }
+
+    [Fact]
+    public async Task SendMessageAsync_CustomerRole_ExposesNewCartAndOrderTools()
+    {
+        // The MCP server offers the new customer tools plus an admin-only one.
+        var runner = RunnerWithTools(
+            new McpToolDescriptor("add_to_cart", "safe", EmptySchema()),
+            new McpToolDescriptor("view_cart", "safe", EmptySchema()),
+            new McpToolDescriptor("get_my_orders", "safe", EmptySchema()),
+            new McpToolDescriptor("get_dashboard_summary", "admin", EmptySchema()));
+        var connector = ConnectorReturning(runner);
+
+        var handler = CapturingHandler(out var sentBody, (HttpStatusCode.OK, TextEnvelope("hi")));
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 42, role: "Customer"));
+
+        await sut.SendMessageAsync(new ChatRequest("hello", null));
+
+        var payload = sentBody.ToString();
+        payload.Should().Contain("add_to_cart");
+        payload.Should().Contain("view_cart");
+        payload.Should().Contain("get_my_orders");
+        payload.Should().NotContain("get_dashboard_summary");   // admin tool still hidden
+    }
 }
