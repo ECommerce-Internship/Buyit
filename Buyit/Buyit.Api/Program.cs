@@ -63,9 +63,10 @@ const string DevCors = "DevCors";
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(DevCors, policy =>
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
               .AllowAnyHeader()
-              .AllowAnyMethod());
+              .AllowAnyMethod()
+              .AllowCredentials());
 });
 
 // EF Core — register the database context
