@@ -83,8 +83,11 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<AuthResponse>> RefreshToken()
     {
         var cookieToken = Request.Cookies[RefreshCookieName];
+        // A missing cookie just means "not signed in" — an expected state on every anonymous page
+        // load, not an exceptional one. Return 401 directly instead of throwing so we don't pay the
+        // exception cost (or trip the debugger) on the app's most common request.
         if (string.IsNullOrEmpty(cookieToken))
-            throw new UnauthorizedException("No refresh token cookie present.");
+            return Unauthorized();
 
         var result = await _auth.RefreshTokenAsync(new RefreshTokenRequest { RefreshToken = cookieToken });
         SetRefreshTokenCookie(result.RefreshToken);
