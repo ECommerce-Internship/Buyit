@@ -157,22 +157,33 @@ public class AuthController : ControllerBase
 
     private void SetRefreshTokenCookie(string refreshToken)
     {
-        Response.Cookies.Append(RefreshCookieName, refreshToken, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = true,
-            // The frontend (http://localhost:5173) and API (https://localhost:7001) differ in
-            // SCHEME, which Chrome's "schemeful same-site" rules treat as cross-site even though
-            // both are "localhost" — so Lax would never send this cookie back. None (+ Secure)
-            // is required for it to survive a cross-scheme/cross-origin XHR like restoreSession().
-            SameSite = SameSiteMode.None,
-            Expires = DateTimeOffset.UtcNow.AddDays(7),
-            Path = "/",
-        });
+        Response.Cookies.Append(RefreshCookieName, refreshToken, BuildRefreshCookieOptions(DateTimeOffset.UtcNow.AddDays(7)));
     }
 
     private void ClearRefreshTokenCookie()
     {
-        Response.Cookies.Delete(RefreshCookieName, new CookieOptions { Path = "/" });
+        // Delete must use the SAME attributes the cookie was written with (Secure/SameSite/Path),
+        // otherwise the browser treats it as a different cookie and the logout leaves it in place.
+        Response.Cookies.Delete(RefreshCookieName, BuildRefreshCookieOptions(null));
+    }
+
+    // Build cookie options that adapt to the request scheme so the refresh flow works in BOTH
+    // local setups and in production:
+    //   - HTTPS request (prod: Vercel -> API, or local https profile): the frontend and API are a
+    //     cross-site pair, so we need SameSite=None, which the spec only allows together with Secure.
+    //   - HTTP request  (local http profile: http://localhost:5173 -> http://localhost:5000): the two
+    //     are same-site, so Lax works — and Secure=false is required, because a Secure cookie set over
+    //     plain HTTP is silently dropped by the browser (that was the "logged out on refresh" bug).
+    private CookieOptions BuildRefreshCookieOptions(DateTimeOffset? expires)
+    {
+        var isHttps = Request.IsHttps;
+        return new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = isHttps,
+            SameSite = isHttps ? SameSiteMode.None : SameSiteMode.Lax,
+            Expires = expires,
+            Path = "/",
+        };
     }
 }

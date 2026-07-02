@@ -295,7 +295,13 @@ if (app.Environment.IsDevelopment())
     app.UseCors(DevCors);   // apply the permissive CORS policy only in development
 }
 
-app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
+// Redirect HTTP->HTTPS only OUTSIDE development. In dev a 307 redirect on a credentialed,
+// cross-origin XHR (login / refresh-token) drops the CORS headers and the browser aborts it,
+// which broke the refresh flow when the frontend talked to the http profile (localhost:5000).
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 // 3. Routing & Endpoint Protections (Must remain in this structural order)
 app.UseRouting();
