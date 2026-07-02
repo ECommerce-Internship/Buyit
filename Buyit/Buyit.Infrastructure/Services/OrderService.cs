@@ -147,20 +147,10 @@ public class OrderService : IOrderService
             order.DiscountAmount = Math.Round(subtotalAll * (discountPct / 100m), 2);
             order.TotalAmount = subtotalAll - order.DiscountAmount;
 
-            // (7) One simulated payment on the parent.
-            order.Payment = new Payment
-            {
-                Amount = order.TotalAmount,
-                Method = PaymentMethod.CreditCard,
-                Status = PaymentStatus.Paid,
-                TransactionId = $"SIM-{Guid.NewGuid():N}",
-                PaidAt = DateTime.UtcNow
-            };
-
             _context.Orders.Add(order);
             await _context.SaveChangesAsync();
 
-            // (8) Clear the cart + remove coupon.
+            // (7) Clear the cart + remove coupon.
             var affectedProductIds = cart.CartItems.Select(ci => ci.ProductId).Distinct().ToList();
             _context.CartItems.RemoveRange(cart.CartItems);
             cart.CouponId = null;
@@ -413,8 +403,8 @@ public class OrderService : IOrderService
         RollUpStatus(order.StoreOrders.Select(so => so.Status)),
         order.TotalAmount,
         order.DiscountAmount,
-        order.ShippingLine1, order.ShippingLine2, order.ShippingCity, order.ShippingState,
-        order.ShippingPostalCode, order.ShippingCountry,
+        order.ShippingLine1, order.ShippingLine2, order.ShippingCity, order.ShippingPostalCode,
+        order.ShippingState, order.ShippingCountry,
         order.Payment != null ? order.Payment.Status.ToString() : null,
         order.StoreOrders.Select(so => new StoreOrderResponse(
             so.Id, so.StoreId, so.Store?.Name ?? string.Empty, so.Status.ToString(),
