@@ -1,4 +1,6 @@
-﻿using Azure.Storage.Blobs;
+﻿using System.Security.Cryptography;
+using System.Text;
+using Azure.Storage.Blobs;
 using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
@@ -15,7 +17,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using StackExchange.Redis;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 // Load configuration from appsettings.json
 builder.Configuration
@@ -70,6 +72,7 @@ builder.Services.AddScoped<IValidator<CreateStoreRequest>, CreateStoreRequestVal
 builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequestValidator>();
 
 // Services
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, McpCurrentUserService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<IProductService, ProductService>();
@@ -87,11 +90,60 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// MCP Server
+// MCP Server — HTTP (streamable) transport instead of stdio (TB-103).
 builder.Services
     .AddMcpServer()
-    .WithStdioServerTransport()
+    .WithHttpTransport(options => options.Stateless = true)
     .WithToolsFromAssembly();
 
 var app = builder.Build();
+
+// TB-103 security gate — authenticate the API -> MCP hop. The MCP server derives the caller's
+// identity from the X-Buyit-Caller-* headers, so it MUST verify those headers actually came from
+// the trusted API before trusting them. A shared secret does that. Without this gate, any client
+// that can reach this HTTP endpoint could send X-Buyit-Caller-Role: Admin and run every tool.
+// Fail closed: if the secret is unconfigured, or missing/wrong on a request, reject it (only the
+// health probe is exempt, since Docker's health check can't carry the secret).
+var mcpSharedSecret = builder.Configuration["Mcp:SharedSecret"];
+var mcpSecretBytes = string.IsNullOrEmpty(mcpSharedSecret)
+    ? Array.Empty<byte>()
+    : Encoding.UTF8.GetBytes(mcpSharedSecret);
+
+app.Use(async (context, next) =>
+{
+    // The liveness probe stays open — it returns no data and speaks no MCP.
+    if (context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+    {
+        await next();
+        return;
+    }
+
+    // Never run wide open: a server with no secret configured refuses all tool traffic.
+    if (mcpSecretBytes.Length == 0)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await context.Response.WriteAsync("MCP server is not configured (Mcp:SharedSecret missing).");
+        return;
+    }
+
+    // Constant-time compare so the secret can't be recovered via a timing side-channel.
+    var providedBytes = Encoding.UTF8.GetBytes(context.Request.Headers["X-Buyit-Mcp-Secret"].ToString());
+    if (!CryptographicOperations.FixedTimeEquals(providedBytes, mcpSecretBytes))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsync("Unauthorized.");
+        return;
+    }
+
+    await next();
+});
+
+// Simple liveness probe for Docker's health check (docker-compose). Returns 200 OK when the
+// server is up. Kept separate from MapMcp so the health check never speaks the MCP protocol.
+app.MapGet("/health", () => Results.Ok("healthy"));
+
+// Expose the MCP protocol over HTTP at the root path. The API's HttpClientTransport
+// (McpConnector) connects here. TB-103.
+app.MapMcp();
+
 await app.RunAsync();

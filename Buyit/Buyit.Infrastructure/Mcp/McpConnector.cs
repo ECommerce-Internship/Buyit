@@ -7,16 +7,26 @@ using ModelContextProtocol.Client;
 
 namespace Buyit.Infrastructure.Mcp;
 
-// Launches the Buyit.MCP project as a child process (stdio) and returns a live tool runner.
-// The caller MUST dispose the returned runner (use 'await using') to stop the process.
+// Connects to the long-lived Buyit.MCP HTTP service and returns a live tool runner.
+// The caller MUST dispose the returned runner (use 'await using') to close the session.
 public class McpConnector : IMcpConnector
 {
+    // Named HttpClient registered in the API's Program.cs. Using the factory means the
+    // underlying socket handler is pooled and reused across chat messages, instead of a
+    // fresh HttpClient (and socket pool) per request — which would risk SNAT/port exhaustion.
+    public const string HttpClientName = "BuyitMcp";
+
     private readonly McpSettings _mcpSettings;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<McpConnector> _logger;
 
-    public McpConnector(IOptions<McpSettings> mcpOptions, ILogger<McpConnector> logger)
+    public McpConnector(
+        IOptions<McpSettings> mcpOptions,
+        IHttpClientFactory httpClientFactory,
+        ILogger<McpConnector> logger)
     {
         _mcpSettings = mcpOptions.Value;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -24,35 +34,38 @@ public class McpConnector : IMcpConnector
     {
         try
         {
-            // Default to the dev launch (`dotnet run --project <csproj>`); production can
-            // override Command/Arguments to run a prebuilt binary with no SDK or source tree.
-            var arguments = _mcpSettings.Arguments.Length > 0
-                ? _mcpSettings.Arguments
-                : new[] { "run", "--project", _mcpSettings.ProjectPath };
+            // A pooled client from the factory — cheap to create, handler is reused (see HttpClientName).
+            var httpClient = _httpClientFactory.CreateClient(HttpClientName);
 
-            var transport = new StdioClientTransport(new StdioClientTransportOptions
-            {
-                Name = "Buyit.MCP",
-                Command = _mcpSettings.Command,
-                Arguments = arguments,
-                // Forward the authenticated caller's identity to the child process. InheritEnvironmentVariables
-                // defaults to true, so these are layered ON TOP of the inherited env (PATH, connection strings,
-                // etc.) — never use null as a value, which would REMOVE a variable. The MCP server's
-                // McpCurrentUserService reads these so its tools act as the real caller, not a hardcoded admin.
-                EnvironmentVariables = new Dictionary<string, string?>
+            // Connect to the MCP HTTP service instead of spawning a child process (TB-103).
+            // The base URL is read from config (Mcp:BaseUrl) so it changes per environment with no
+            // code change. Identity travels as per-request HTTP headers — NOT environment variables —
+            // because the HTTP server is shared by all callers (see McpCurrentUserService). The
+            // shared secret authenticates THIS API to the MCP server so those identity headers are
+            // only trusted from us and can't be spoofed by anything else that reaches the endpoint.
+            var transport = new HttpClientTransport(
+                new HttpClientTransportOptions
                 {
-                    ["BUYIT_CALLER_USERID"] = callerId.ToString(CultureInfo.InvariantCulture),
-                    ["BUYIT_CALLER_ROLE"] = callerRole ?? string.Empty
-                }
-            });
+                    Name = "Buyit.MCP",
+                    Endpoint = new Uri(_mcpSettings.BaseUrl),
+                    TransportMode = HttpTransportMode.StreamableHttp,
+                    AdditionalHeaders = new Dictionary<string, string>
+                    {
+                        ["X-Buyit-Mcp-Secret"] = _mcpSettings.SharedSecret,
+                        ["X-Buyit-Caller-UserId"] = callerId.ToString(CultureInfo.InvariantCulture),
+                        ["X-Buyit-Caller-Role"] = callerRole ?? string.Empty
+                    }
+                },
+                httpClient,
+                ownsHttpClient: false); // the factory owns the client's lifetime, not the transport
 
             var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
             return new McpToolRunner(client);
         }
         catch (Exception ex)
         {
-            // Any failure to launch/handshake the MCP server is an external-service failure.
-            _logger.LogWarning(ex, "Could not connect to the Buyit MCP server.");
+            // Any failure to reach/handshake the MCP server is an external-service failure.
+            _logger.LogWarning(ex, "Could not connect to the Buyit MCP server at {BaseUrl}.", _mcpSettings.BaseUrl);
             throw new ExternalServiceException("Could not reach the Buyit tools service.", ex);
         }
     }

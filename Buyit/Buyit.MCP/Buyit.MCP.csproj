@@ -1,28 +1,19 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
     <ProjectReference Include="..\Buyit.Infrastructure\Buyit.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <!-- Microsoft.Extensions.Hosting is provided implicitly by the Web SDK; referencing it
+         explicitly triggers NU1510, so it is intentionally omitted (TB-103). -->
     <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.0" />
   </ItemGroup>
 
-    <ItemGroup>
-	    <Content Include="appsettings.json">
-		    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-	    </Content>
-    </ItemGroup>
-
-	<ItemGroup>
-		<Content Include="appsettings.json">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Content>
-		<Content Include="appsettings.Development.json" Condition="Exists('appsettings.Development.json')">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Content>
-	</ItemGroup>
+  <!-- The Web SDK (Microsoft.NET.Sdk.Web) auto-includes appsettings.json / appsettings.*.json
+       as Content and copies them to the output. Explicit <Content Include> items would duplicate
+       those and fail the build (NETSDK1022), so they are intentionally omitted. -->
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
