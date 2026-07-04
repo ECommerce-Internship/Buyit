@@ -8,5 +8,8 @@ public record CartItemResponse(
     string Sku,
     decimal UnitPrice,
     int Quantity,
-    decimal LineTotal
+    decimal LineTotal,
+    int StoreId,
+    string StoreName,
+    int QuantityInStock
 );
