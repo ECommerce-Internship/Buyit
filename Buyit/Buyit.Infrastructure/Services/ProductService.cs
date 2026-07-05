@@ -142,7 +142,10 @@ public class ProductService : IProductService
                 StoreSlug = p.Store.Slug,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
-                ReviewCount = p.Reviews.Count
+                ReviewCount = p.Reviews.Count,
+                SeoTitle = p.SeoTitle,
+                MetaDescription = p.MetaDescription
+
             })
             .ToListAsync();   // <-- THE database is hit HERE, exactly once.
 
@@ -194,7 +197,9 @@ public class ProductService : IProductService
                     StoreSlug = p.Store.Slug,
                     QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
                     AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
-                    ReviewCount = p.Reviews.Count
+                    ReviewCount = p.Reviews.Count,
+                    SeoTitle = p.SeoTitle,
+                    MetaDescription = p.MetaDescription
                 })
                 .FirstOrDefaultAsync();
 
@@ -273,7 +278,9 @@ public class ProductService : IProductService
                 StoreName = p.Store.Name,
                 StoreSlug = p.Store.Slug,
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                SeoTitle = p.SeoTitle,
+                MetaDescription = p.MetaDescription
             })
             .ToListAsync();
 
@@ -329,6 +336,8 @@ public class ProductService : IProductService
             ImageUrl = request.ImageUrl,
             CategoryId = request.CategoryId,
             StoreId = request.StoreId,
+            SeoTitle = request.SeoTitle,
+            MetaDescription = request.MetaDescription,
             CreatedAt = DateTime.UtcNow,
             IsDeleted = false,
             Inventory = new Inventory
@@ -377,6 +386,8 @@ public class ProductService : IProductService
         product.Price = request.Price;
         product.ImageUrl = request.ImageUrl;
         product.CategoryId = request.CategoryId;
+        product.SeoTitle = request.SeoTitle;
+        product.MetaDescription = request.MetaDescription;
 
         // 5) One UPDATE statement is sent here.
         await _db.SaveChangesAsync();

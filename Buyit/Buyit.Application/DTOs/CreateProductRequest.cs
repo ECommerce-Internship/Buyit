@@ -8,6 +8,8 @@ public class CreateProductRequest
     public string Sku { get; set; } = string.Empty;
     public decimal Price { get; set; }
     public string? ImageUrl { get; set; }
+    public string? SeoTitle { get; set; }
+    public string? MetaDescription { get; set; }
 
     // Which category this product belongs to (an int id in THIS project, not a GUID).
     public int CategoryId { get; set; }

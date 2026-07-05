@@ -13,6 +13,8 @@ public class ProductResponse
     public decimal Price { get; set; }
     public string? ImageUrl { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? SeoTitle { get; set; }
+    public string? MetaDescription { get; set; }
 
     // Foreign key + a friendly name pulled from the joined Category.
     public int CategoryId { get; set; }

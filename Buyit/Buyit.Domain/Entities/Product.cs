@@ -31,6 +31,12 @@ public class Product
     // keeping the row intact for past orders, reviews and reports.
     public bool IsDeleted { get; set; } = false;
 
+    [MaxLength(200)]
+    public string? SeoTitle { get; set; }
+
+    [MaxLength(500)]
+    public string? MetaDescription { get; set; }
+
     // Each product belongs to exactly one category (1:N — FK on this "many" side).
     public int CategoryId { get; set; }
     public Category Category { get; set; } = null!;
