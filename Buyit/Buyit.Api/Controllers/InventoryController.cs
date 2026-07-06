@@ -34,6 +34,15 @@ public class InventoryController : ControllerBase
         return Ok(inventory);
     }
 
+    // GET api/v1/inventory/mine?storeId=X — one store's inventory (the seller's own, or an
+    // admin's pick). Ownership is enforced inside the service (403 otherwise).
+    [HttpGet("mine")]
+    public async Task<IActionResult> GetMine([FromQuery] int storeId)
+    {
+        var inventory = await _inventoryService.GetByStoreAsync(storeId);
+        return Ok(inventory);
+    }
+
     // PUT api/v1/inventory/{productId}/stock
     [HttpPut("{productId:int}/stock")]
     public async Task<IActionResult> UpdateStock(int productId, [FromBody] int newQuantity)

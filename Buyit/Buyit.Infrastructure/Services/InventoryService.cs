@@ -60,7 +60,23 @@ public class InventoryService : IInventoryService
         if (inventory == null)
             throw new NotFoundException($"Inventory for product with ID {productId} was not found.");
 
+        // Ownership (TB-125): only the owning seller (or an admin) may view this inventory.
+        await EnsureCanManageStoreAsync(inventory.Product.StoreId);
+
         return ToResponse(inventory);
+    }
+
+    // GET BY STORE: one store's inventory rows — the seller's own store, or admin's pick.
+    public async Task<IEnumerable<InventoryResponse>> GetByStoreAsync(int storeId)
+    {
+        await EnsureCanManageStoreAsync(storeId);
+
+        return await _context.Inventories
+            .Include(i => i.Product)
+            .Where(i => !i.Product.IsDeleted && i.Product.StoreId == storeId)
+            .OrderBy(i => i.QuantityInStock)
+            .Select(i => ToResponse(i))
+            .ToListAsync();
     }
 
     // PUT STOCK: Updates quantity, triggers low stock alert if quantity <= threshold
