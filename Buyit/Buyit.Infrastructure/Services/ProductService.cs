@@ -74,7 +74,10 @@ public class ProductService : IProductService
         if (string.IsNullOrWhiteSpace(response.FeaturesJson)) return;
         try
         {
-            response.Features = JsonSerializer.Deserialize<List<string>>(response.FeaturesJson);
+            var features = JsonSerializer.Deserialize<List<string>>(response.FeaturesJson)
+                ?.Where(f => !string.IsNullOrWhiteSpace(f))
+                .ToList();
+            response.Features = features is { Count: > 0 } ? features : null;
         }
         catch (JsonException)
         {
@@ -353,6 +356,7 @@ public class ProductService : IProductService
         //    SINGLE SaveChanges (one transaction): either both succeed or neither does.
         //    This avoids the previous two-save approach, where the product could be created
         //    but the inventory insert could fail, leaving a product with no stock record.
+        var cleanedFeatures = request.Features?.Where(f => !string.IsNullOrWhiteSpace(f)).ToList();
         var product = new Product
         {
             Name = request.Name,
@@ -364,7 +368,7 @@ public class ProductService : IProductService
             StoreId = request.StoreId,
             SeoTitle = request.SeoTitle,
             MetaDescription = request.MetaDescription,
-            FeaturesJson = request.Features is { Count: > 0 } ? JsonSerializer.Serialize(request.Features) : null,
+            FeaturesJson = cleanedFeatures is { Count: > 0 } ? JsonSerializer.Serialize(cleanedFeatures) : null,
             CreatedAt = DateTime.UtcNow,
             IsDeleted = false,
             Inventory = new Inventory
@@ -415,7 +419,8 @@ public class ProductService : IProductService
         product.CategoryId = request.CategoryId;
         product.SeoTitle = request.SeoTitle;
         product.MetaDescription = request.MetaDescription;
-        product.FeaturesJson = request.Features is { Count: > 0 } ? JsonSerializer.Serialize(request.Features) : null;
+        var cleanedFeatures = request.Features?.Where(f => !string.IsNullOrWhiteSpace(f)).ToList();
+        product.FeaturesJson = cleanedFeatures is { Count: > 0 } ? JsonSerializer.Serialize(cleanedFeatures) : null;
 
         // 5) One UPDATE statement is sent here.
         await _db.SaveChangesAsync();
