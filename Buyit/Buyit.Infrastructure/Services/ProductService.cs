@@ -308,8 +308,7 @@ public class ProductService : IProductService
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
                 SeoTitle = p.SeoTitle,
                 MetaDescription = p.MetaDescription,
-                FeaturesJson = p.FeaturesJson
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                FeaturesJson = p.FeaturesJson,
                 ReviewCount = p.Reviews.Count
             })
             .ToListAsync();
