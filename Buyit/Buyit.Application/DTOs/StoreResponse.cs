@@ -9,4 +9,7 @@ public record StoreResponse
     public string? Description { get; set; }
     public string Status { get; set; } = string.Empty;   // "Pending" / "Approved" / "Suspended"
     public DateTime CreatedAt { get; set; }
+    // The owner's display name ("First Last"). Null when the Owner navigation wasn't loaded
+    // (only the admin store lists Include it). Added for TB-140's owner column.
+    public string? OwnerName { get; set; }
 }

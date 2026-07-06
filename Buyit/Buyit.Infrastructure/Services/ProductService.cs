@@ -309,6 +309,8 @@ public class ProductService : IProductService
                 SeoTitle = p.SeoTitle,
                 MetaDescription = p.MetaDescription,
                 FeaturesJson = p.FeaturesJson
+                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewCount = p.Reviews.Count
             })
             .ToListAsync();
             PopulateFeatures(items);

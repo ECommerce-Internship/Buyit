@@ -8,5 +8,7 @@ public record PaymentResponse(
     string Method,
     string Status,
     string? TransactionId,
-    DateTime? PaidAt
+    DateTime? PaidAt,
+    string? CustomerName = null,
+    string? CustomerEmail = null
 );

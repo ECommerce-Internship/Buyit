@@ -180,7 +180,9 @@ public class PaymentService : IPaymentService
             .Select(p => new PaymentResponse(
                 p.Id, p.OrderId, p.Amount,
                 p.Method.ToString(), p.Status.ToString(),
-                p.TransactionId, p.PaidAt))
+                p.TransactionId, p.PaidAt,
+                p.Order.User.FirstName + " " + p.Order.User.LastName,
+                p.Order.User.Email))
             .ToListAsync();
 
         return new PaginatedResult<PaymentResponse>

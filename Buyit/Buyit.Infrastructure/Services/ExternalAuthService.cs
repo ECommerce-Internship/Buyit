@@ -83,10 +83,22 @@ public class ExternalAuthService : IExternalAuthService
 
         if (userWithSameEmail is not null)
         {
-            // 4) Email collision -> block with a clear 409 (no silent merge).
-            throw new ConflictException(
-                "An account with this email already exists. " +
-                "Please sign in with your email and password instead.");
+            // 4) Email already has an account. Step 2 guaranteed Google VERIFIED this email,
+            //    so the person signing in provably owns it -> it is safe to LINK the Google
+            //    identity to the existing account and sign them in (account linking), instead
+            //    of blocking. This lets existing email/password users use "Login with Google".
+            var link = new UserExternalLogin
+            {
+                Provider = AuthProviders.Google,
+                ProviderUserId = claims.Subject,
+                User = userWithSameEmail
+            };
+            _db.UserExternalLogins.Add(link);
+
+            // Do NOT SaveChanges yet. The existing user already has a real Id, so let
+            // IssueTokensAsync persist the new link AND the refresh token in a SINGLE
+            // SaveChanges (one transaction) — we never end up with a link but no tokens.
+            return await IssueTokensAsync(userWithSameEmail);
         }
 
         // 5) Brand-new user: create User (no password) + link row.

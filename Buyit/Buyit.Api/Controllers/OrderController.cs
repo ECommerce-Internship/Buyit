@@ -112,4 +112,16 @@ public class AdminOrderController : ControllerBase
         var order = await _orderService.UpdateStoreOrderStatusAsync(storeOrderId, callerUserId: 0, isAdmin: true, request);
         return Ok(order);
     }
+
+    // PUT api/v1/admin/orders/{id}/status
+    // Sets ONE status for the whole order by updating all its store-slices (TB-66).
+    [HttpPut("{id:int}/status")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] UpdateOrderStatusRequest request)
+    {
+        var order = await _orderService.UpdateOrderStatusAsync(id, request);
+        return Ok(order);
+    }
 }

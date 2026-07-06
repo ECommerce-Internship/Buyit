@@ -1,4 +1,5 @@
 using Buyit.Application.Validators;
+using Buyit.Domain.Entities;
 using Buyit.Domain.Enums;
 using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
@@ -20,6 +21,15 @@ public class StoreServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         db = new AppDbContext(options);
+
+        // Seed the owner users these tests reference (ids 1 and 2). GetPendingStoresAsync /
+        // GetAllStoresAsync use .Include(s => s.Owner) on a REQUIRED relationship, which returns
+        // no rows for a store whose owner isn't present — so the owners must exist first.
+        db.Users.AddRange(
+            new User { Id = 1, FirstName = "Owner", LastName = "One", Email = "owner1@test.local" },
+            new User { Id = 2, FirstName = "Owner", LastName = "Two", Email = "owner2@test.local" });
+        db.SaveChanges();
+
         // Use the REAL validator so the length/required rules are exercised by these tests.
         return new StoreService(db, new CreateStoreRequestValidator(), new Mock<ILogger<StoreService>>().Object);
     }
@@ -93,6 +103,32 @@ public class StoreServiceTests
 
         pending.Should().HaveCount(1);
         pending[0].Name.Should().Be("B");
+    }
+
+    [Fact]
+    public async Task GetStoresForUser_ReturnsOnlyThatUsersStores_AnyStatus()
+    {
+        var sut = BuildSut(out _);
+        var a = await sut.CreateStoreForUserAsync(1, "Alpha", null);   // user 1
+        await sut.CreateStoreForUserAsync(1, "Beta", null);            // user 1
+        await sut.CreateStoreForUserAsync(2, "Gamma", null);           // user 2
+        await sut.ApproveAsync(a.Id);                                  // Alpha approved -> still listed
+
+        var mine = await sut.GetStoresForUserAsync(1);
+
+        mine.Should().HaveCount(2);
+        mine.Select(s => s.Name).Should().BeEquivalentTo(new[] { "Alpha", "Beta" });
+        mine.Select(s => s.Name).Should().NotContain("Gamma");   // other user's store excluded
+    }
+
+    [Fact]
+    public async Task GetStoresForUser_NoStores_ReturnsEmpty()
+    {
+        var sut = BuildSut(out _);
+
+        var mine = await sut.GetStoresForUserAsync(99);
+
+        mine.Should().BeEmpty();
     }
 
     [Fact]

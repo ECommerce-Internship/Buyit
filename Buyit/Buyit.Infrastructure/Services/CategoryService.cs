@@ -98,6 +98,11 @@ public class CategoryService : ICategoryService
         if (nameExists)
             throw new ConflictException($"A category named '{request.Name}' already exists.");
 
+        // A supplied parent must actually exist, otherwise the FK insert fails with a raw 500.
+        if (request.ParentCategoryId is int parentId &&
+            !await _context.Categories.AnyAsync(c => c.Id == parentId))
+            throw new NotFoundException($"Parent category with ID {parentId} was not found.");
+
         var category = new Category
         {
             Name = request.Name,
@@ -140,6 +145,15 @@ public class CategoryService : ICategoryService
         if (nameExists)
             throw new ConflictException($"Another category named '{request.Name}' already exists.");
 
+        // A category cannot be its own parent, and a supplied parent must actually exist.
+        if (request.ParentCategoryId is int parentId)
+        {
+            if (parentId == id)
+                throw new ConflictException("A category cannot be its own parent.");
+            if (!await _context.Categories.AnyAsync(c => c.Id == parentId))
+                throw new NotFoundException($"Parent category with ID {parentId} was not found.");
+        }
+
         category.Name = request.Name;
         category.Description = request.Description;
         category.ParentCategoryId = request.ParentCategoryId;
@@ -161,6 +175,12 @@ public class CategoryService : ICategoryService
         var hasProducts = await _context.Products.AnyAsync(p => p.CategoryId == id);
         if (hasProducts)
             throw new ConflictException("Cannot delete category because it has active products linked to it.");
+
+        // The self-referencing FK is Restrict, so deleting a parent that still has children would
+        // throw a raw DbUpdateException (500). Surface it as a clear 409 instead.
+        var hasSubcategories = await _context.Categories.AnyAsync(c => c.ParentCategoryId == id);
+        if (hasSubcategories)
+            throw new ConflictException("Cannot delete category because it has subcategories. Delete or reassign them first.");
 
         _context.Categories.Remove(category);
         await _context.SaveChangesAsync();

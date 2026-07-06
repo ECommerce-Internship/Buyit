@@ -17,8 +17,14 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 
+  <!-- Needed to construct DefaultHttpContext when testing McpCurrentUserService (TB-103). -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Buyit.Infrastructure\Buyit.Infrastructure.csproj" />
+    <ProjectReference Include="..\Buyit.MCP\Buyit.MCP.csproj" />
   </ItemGroup>
 
   <ItemGroup>

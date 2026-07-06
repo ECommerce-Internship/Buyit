@@ -8,10 +8,15 @@ using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Application.Validators;
 using Buyit.Infrastructure.Data;
+using Buyit.Infrastructure.Mcp;
 using Buyit.Infrastructure.Services;
 using Buyit.Infrastructure.Workers;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Globalization;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
@@ -56,12 +61,25 @@ builder.Services.AddBuyitSwagger();
 
 // CORS Policy
 const string DevCors = "DevCors";
+const string ProdCors = "ProdCors";
+// Production origins come from config so the deployed SPA (e.g. the Vercel URL) is allowed.
+// Set them in appsettings.Production.json or an env var (Cors__AllowedOrigins__0=https://...).
+// AllowCredentials is required because the refresh-token cookie rides on cross-site XHRs.
+var prodCorsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? Array.Empty<string>();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(DevCors, policy =>
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
               .AllowAnyHeader()
-              .AllowAnyMethod());
+              .AllowAnyMethod()
+              .AllowCredentials());
+
+    options.AddPolicy(ProdCors, policy =>
+        policy.WithOrigins(prodCorsOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials());
 });
 
 // EF Core — register the database context
@@ -124,6 +142,7 @@ builder.Services.AddScoped<IValidator<GenerateContentRequest>, GenerateContentRe
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+builder.Services.AddScoped<IConversationStore, RedisConversationStore>();
 
 // --- TB-43: Azure Queue + SendGrid registrations ---
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
@@ -142,6 +161,58 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+
+// --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
+builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
+builder.Services.Configure<ChatHistorySettings>(builder.Configuration.GetSection("ChatHistory"));
+// TB-103: pooled HttpClient for the MCP HTTP transport. A factory-managed client reuses its
+// socket handler across chat messages (avoids per-request HttpClient socket exhaustion).
+builder.Services.AddHttpClient(McpConnector.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<IMcpConnector, McpConnector>();
+builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
+builder.Services.AddScoped<IChatService, ChatService>();
+
+// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle the
+// "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
+// caller's "sub" claim, no queue (excess -> 429). Uses AddPolicy so we can partition by user —
+// AddSlidingWindowLimiter alone would create a single shared bucket. No new libraries: this is
+// the built-in System.Threading.RateLimiting / Microsoft.AspNetCore.RateLimiting.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // On a 429, tell the client when it may retry (RFC 9110 §10.2.3) so well-behaved callers
+    // back off instead of hammering. The sliding-window limiter exposes this via lease metadata.
+    options.OnRejected = (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)retryAfter.TotalSeconds).ToString(NumberFormatInfo.InvariantInfo);
+        return ValueTask.CompletedTask;
+    };
+
+    options.AddPolicy("chat", httpContext =>
+    {
+        // One bucket per authenticated user. This limiter runs AFTER UseAuthorization (see the
+        // pipeline below), so "sub" is always populated for chat; fall back to the client IP
+        // (then a constant) so a missing key can never merge all callers into a shared bucket.
+        var partitionKey = httpContext.User?.FindFirst("sub")?.Value
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous";
+
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+            new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 10,                       // 10 requests...
+                Window = TimeSpan.FromMinutes(1),       // ...per rolling minute...
+                SegmentsPerWindow = 6,                  // ...checked in 10-second slices (smooth)
+                QueueLimit = 0                          // no waiting room: excess -> immediate 429
+            });
+    });
+});
 
 // Read the Jwt settings once so we can reuse them below
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
@@ -197,6 +268,22 @@ if (app.Environment.IsDevelopment())
     DbInitializer.Seed(db);     // insert seed data (runs once)
 }
 
+// 0. Honor X-Forwarded-* from the hosting proxy/load balancer so Request.IsHttps and Request.Scheme
+// reflect the ORIGINAL client scheme (TLS is usually terminated at the proxy in prod). Without this,
+// Request.IsHttps is false behind a proxy and the refresh-token cookie would be written insecure/Lax,
+// breaking cross-site session restore. Gated to non-dev so it is a strict no-op locally.
+if (!app.Environment.IsDevelopment())
+{
+    var forwardedOptions = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor,
+    };
+    // Cloud proxies use dynamic IPs and strip client-supplied forwarded headers, so trust them.
+    forwardedOptions.KnownNetworks.Clear();
+    forwardedOptions.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwardedOptions);
+}
+
 // 1. Core Exception Interceptor (Handles errors before lower-level middlewares log them)
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
@@ -240,15 +327,26 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();       // serves the built-in OpenAPI JSON at /openapi/v1.json
     app.UseSwagger();       // serves Swashbuckle's OpenAPI JSON
     app.UseSwaggerUI();     // serves the interactive UI page at /swagger
-    app.UseCors(DevCors);   // apply the permissive CORS policy only in development
+    app.UseCors(DevCors);   // permissive localhost CORS for the Vite dev server
+}
+else
+{
+    app.UseCors(ProdCors);  // named origins from config; needed for the SPA's credentialed XHRs
 }
 
-app.UseHttpsRedirection();  // redirect HTTP requests to HTTPS
+// Redirect HTTP->HTTPS only OUTSIDE development. In dev a 307 redirect on a credentialed,
+// cross-origin XHR (login / refresh-token) drops the CORS headers and the browser aborts it,
+// which broke the refresh flow when the frontend talked to the http profile (localhost:5000).
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 // 3. Routing & Endpoint Protections (Must remain in this structural order)
 app.UseRouting();
 app.UseAuthentication();    // identify who the user is (reads & validates the token)
 app.UseAuthorization();     // authorization checks based on claims/roles
+app.UseRateLimiter();       // enforce per-endpoint rate limits (e.g. the "chat" policy)
 
 app.MapControllers();       // route requests to your controllers
 

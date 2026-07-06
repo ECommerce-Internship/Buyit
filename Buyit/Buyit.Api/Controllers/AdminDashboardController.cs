@@ -16,6 +16,14 @@ public class AdminDashboardController : ControllerBase
     private readonly IDashboardService _dash;
     public AdminDashboardController(IDashboardService dash) => _dash = dash;
 
+    // GET api/v1/admin/dashboard  — everything the dashboard needs in one call (TB-66).
+    [HttpGet]
+    [ProducesResponseType(typeof(AdminDashboardResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> All([FromQuery] string period = "month")
+        => Ok(await _dash.GetAdminDashboardAsync(period));
+
     [HttpGet("summary")]
     [ProducesResponseType(typeof(DashboardSummaryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]

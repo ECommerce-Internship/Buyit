@@ -100,4 +100,21 @@ public class CartServiceTests
         .SelectMany(e => e)
         .Should().Contain(m => m.Contains("Wireless Mouse"));
     }
+
+    // TEST 3: A zero or negative quantity is rejected and nothing is persisted.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task AddToCart_NonPositiveQuantity_ThrowsAndPersistsNothing(int quantity)
+    {
+        var sut = BuildSut(out var db);
+        var userId = await SeedUserAsync(db);
+        var product = await SeedProductAsync(db, stock: 10);
+
+        Func<Task> act = async () =>
+            await sut.AddItemAsync(userId, new AddCartItemRequest(product.Id, quantity));
+
+        await act.Should().ThrowAsync<ValidationException>();
+        (await db.CartItems.AnyAsync()).Should().BeFalse();   // no corrupt line persisted
+    }
 }

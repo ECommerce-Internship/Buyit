@@ -26,6 +26,15 @@ public class CartService : ICartService
     // ADD ITEM: Finds or creates cart + validates stock + upserts cart item
     public async Task<CartResponse> AddItemAsync(int userId, AddCartItemRequest request)
     {
+        // Lower-bound guard: quantity must be positive. Without this, a zero/negative quantity
+        // (e.g. from an LLM-driven add_to_cart) would slip past the stock check and persist a
+        // corrupt cart line. Guards both the HTTP and MCP paths since both call this method.
+        if (request.Quantity < 1)
+            throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+            {
+                ["quantity"] = ["Quantity must be at least 1."]
+            });
+
         var cart = await GetOrCreateCartAsync(userId);
 
         // Check product exists and is not soft-deleted
