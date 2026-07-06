@@ -33,4 +33,11 @@ public class ProductResponse
 
     // Computed: how many reviews this product has (0 if none yet).
     public int ReviewCount { get; set; }
+
+    public List<string>? Features { get; set; }
+
+    // Raw JSON straight from the DB, deserialized into Features right after the query
+    // runs (see ProductService). Not part of the public API contract.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? FeaturesJson { get; set; }
 }

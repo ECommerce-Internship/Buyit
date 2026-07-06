@@ -10,6 +10,7 @@ public class CreateProductRequest
     public string? ImageUrl { get; set; }
     public string? SeoTitle { get; set; }
     public string? MetaDescription { get; set; }
+    public List<string>? Features { get; set; }
 
     // Which category this product belongs to (an int id in THIS project, not a GUID).
     public int CategoryId { get; set; }

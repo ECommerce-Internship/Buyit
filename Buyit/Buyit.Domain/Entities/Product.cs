@@ -37,6 +37,9 @@ public class Product
     [MaxLength(500)]
     public string? MetaDescription { get; set; }
 
+    [MaxLength(4000)]
+    public string? FeaturesJson { get; set; }
+
     // Each product belongs to exactly one category (1:N — FK on this "many" side).
     public int CategoryId { get; set; }
     public Category Category { get; set; } = null!;

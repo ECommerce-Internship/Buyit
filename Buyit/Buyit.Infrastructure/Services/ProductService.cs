@@ -13,6 +13,7 @@ using System.Globalization;
 using System.Security.Cryptography;   
 using System.Text;                  
 using ValidationException = Buyit.Domain.Exceptions.ValidationException;
+using System.Text.Json;
 
 namespace Buyit.Infrastructure.Services;
 
@@ -63,6 +64,27 @@ public class ProductService : IProductService
         var ownsStore = await _db.Stores.AnyAsync(s => s.Id == storeId && s.OwnerUserId == userId);
         if (!ownsStore)
             throw new ForbiddenException("You can only manage products in your own store.");
+    }
+
+    // Turns the raw FeaturesJson column into the public Features list. Malformed JSON
+    // (shouldn't happen — we're the only writer) is treated as "no features" rather
+    // than throwing, so one bad row can't break an entire list request.
+    private static void PopulateFeatures(ProductResponse response)
+    {
+        if (string.IsNullOrWhiteSpace(response.FeaturesJson)) return;
+        try
+        {
+            response.Features = JsonSerializer.Deserialize<List<string>>(response.FeaturesJson);
+        }
+        catch (JsonException)
+        {
+            response.Features = null;
+        }
+    }
+
+    private static void PopulateFeatures(IEnumerable<ProductResponse> responses)
+    {
+        foreach (var r in responses) PopulateFeatures(r);
     }
 
     public async Task<PaginatedResult<ProductResponse>> GetAllAsync(ProductQueryParameters query)
@@ -144,11 +166,12 @@ public class ProductService : IProductService
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
                 ReviewCount = p.Reviews.Count,
                 SeoTitle = p.SeoTitle,
-                MetaDescription = p.MetaDescription
+                MetaDescription = p.MetaDescription,
+                FeaturesJson = p.FeaturesJson
 
             })
             .ToListAsync();   // <-- THE database is hit HERE, exactly once.
-
+            PopulateFeatures(items);
         // Compute total pages = ceil(totalCount / pageSize). We cast to double on purpose so
         // the division keeps its remainder (e.g. 25/10 = 2.5 -> Ceiling -> 3), then back to int.
         var totalPages = (int)Math.Ceiling(totalCount / (double)query.PageSize);
@@ -199,14 +222,15 @@ public class ProductService : IProductService
                     AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
                     ReviewCount = p.Reviews.Count,
                     SeoTitle = p.SeoTitle,
-                    MetaDescription = p.MetaDescription
+                    MetaDescription = p.MetaDescription,
+                    FeaturesJson = p.FeaturesJson
                 })
                 .FirstOrDefaultAsync();
 
             // No row matched (wrong id, or the product is soft-deleted) -> 404 via middleware.
             if (product is null)
                 throw new NotFoundException($"Product with id {id} was not found.");
-
+                PopulateFeatures(product);
             // --- CACHE-ASIDE (write): save this product for 5 minutes. ---
             await _cache.SetAsync(cacheKey, product, TimeSpan.FromMinutes(5));
         }
@@ -280,9 +304,11 @@ public class ProductService : IProductService
                 QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
                 SeoTitle = p.SeoTitle,
-                MetaDescription = p.MetaDescription
+                MetaDescription = p.MetaDescription,
+                FeaturesJson = p.FeaturesJson
             })
             .ToListAsync();
+            PopulateFeatures(items);
 
         return new PaginatedResult<ProductResponse>
         {
@@ -338,6 +364,7 @@ public class ProductService : IProductService
             StoreId = request.StoreId,
             SeoTitle = request.SeoTitle,
             MetaDescription = request.MetaDescription,
+            FeaturesJson = request.Features is { Count: > 0 } ? JsonSerializer.Serialize(request.Features) : null,
             CreatedAt = DateTime.UtcNow,
             IsDeleted = false,
             Inventory = new Inventory
@@ -388,6 +415,7 @@ public class ProductService : IProductService
         product.CategoryId = request.CategoryId;
         product.SeoTitle = request.SeoTitle;
         product.MetaDescription = request.MetaDescription;
+        product.FeaturesJson = request.Features is { Count: > 0 } ? JsonSerializer.Serialize(request.Features) : null;
 
         // 5) One UPDATE statement is sent here.
         await _db.SaveChangesAsync();
