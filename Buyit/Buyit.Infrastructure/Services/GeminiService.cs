@@ -75,6 +75,36 @@ public class GeminiService : IGeminiService
             - "metaDescription": a string of 155 characters or fewer.
             """;
 
+        // Gemini occasionally returns a seoTitle/metaDescription that breaks the rules below.
+        // Rather than fail the request and make the admin click Generate again, retry the
+        // whole call internally a few times first — the 155/60-char rules are unchanged,
+        // this only adds silent retries around them.
+        const int maxAttempts = 3;
+        ExternalServiceException lastFailure = new("The AI content service did not return a usable response.");
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                var content = await CallGeminiOnceAsync(prompt, cancellationToken);
+                _logger.LogInformation("Generated AI content for product {ProductName} (attempt {Attempt}).", productName, attempt);
+                return content;
+            }
+            catch (ExternalServiceException ex)
+            {
+                lastFailure = ex;
+                _logger.LogWarning("Gemini attempt {Attempt}/{MaxAttempts} failed: {Message}", attempt, maxAttempts, ex.Message);
+            }
+        }
+
+        // Every attempt failed — surface the last (most informative) failure to the caller.
+        throw lastFailure;
+    }
+
+    // One full round-trip to Gemini: send the prompt, parse the envelope, and enforce the
+    // same quality rules as before (5 features, seoTitle <=60 chars, metaDescription <=155 chars).
+    private async Task<ProductContentResponse> CallGeminiOnceAsync(string prompt, CancellationToken cancellationToken)
+    {
         // 3) Build Gemini's request body, with JSON mode turned on.
         var requestBody = new
         {
@@ -101,8 +131,7 @@ public class GeminiService : IGeminiService
             response = await client.SendAsync(httpRequest, cancellationToken);
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            // The token was NOT cancelled by the caller, so this is the HttpClient timeout.
+        {    // The token was NOT cancelled by the caller, so this is the HttpClient timeout.
             _logger.LogWarning(ex, "Gemini request timed out.");
             throw new ExternalServiceException("The AI content service timed out. Please try again.", ex);
         }
@@ -116,7 +145,6 @@ public class GeminiService : IGeminiService
         if (!response.IsSuccessStatusCode)
         {
             var status = response.StatusCode;
-
             // Log the upstream error body so operators can diagnose the failure
             // (e.g. the exact quota that caused a 429). It is NOT returned to the
             // caller, because it can contain project/quota identifiers.
@@ -190,8 +218,6 @@ public class GeminiService : IGeminiService
 
         if (content.MetaDescription is null || content.MetaDescription.Length > 155)
             throw new ExternalServiceException("The AI meta description exceeded 155 characters.");
-
-        _logger.LogInformation("Generated AI content for product {ProductName}.", productName);
 
         // 9) All good — return the populated DTO.
         return content;

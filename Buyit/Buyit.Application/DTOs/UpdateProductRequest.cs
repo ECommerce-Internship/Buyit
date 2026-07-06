@@ -8,4 +8,7 @@ public class UpdateProductRequest
     public decimal Price { get; set; }
     public string? ImageUrl { get; set; }
     public int CategoryId { get; set; }
+    public string? SeoTitle { get; set; }
+    public string? MetaDescription { get; set; }
+    public List<string>? Features { get; set; }
 }

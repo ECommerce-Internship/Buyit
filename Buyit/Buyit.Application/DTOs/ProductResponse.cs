@@ -13,6 +13,8 @@ public class ProductResponse
     public decimal Price { get; set; }
     public string? ImageUrl { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? SeoTitle { get; set; }
+    public string? MetaDescription { get; set; }
 
     // Foreign key + a friendly name pulled from the joined Category.
     public int CategoryId { get; set; }
@@ -31,4 +33,11 @@ public class ProductResponse
 
     // Computed: how many reviews this product has (0 if none yet).
     public int ReviewCount { get; set; }
+
+    public List<string>? Features { get; set; }
+
+    // Raw JSON straight from the DB, deserialized into Features right after the query
+    // runs (see ProductService). Not part of the public API contract.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? FeaturesJson { get; set; }
 }

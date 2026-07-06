@@ -186,10 +186,14 @@ public class CartService : ICartService
     private async Task<Cart> GetOrCreateCartAsync(int userId)
     {
         var cart = await _context.Carts
-            .Include(c => c.CartItems)
-                .ThenInclude(ci => ci.Product)
-            .Include(c => c.Coupon)
-            .FirstOrDefaultAsync(c => c.UserId == userId);
+        .Include(c => c.CartItems)
+            .ThenInclude(ci => ci.Product)
+                .ThenInclude(p => p.Store)
+        .Include(c => c.CartItems)
+            .ThenInclude(ci => ci.Product)
+                .ThenInclude(p => p.Inventory)
+        .Include(c => c.Coupon)
+        .FirstOrDefaultAsync(c => c.UserId == userId);
 
         if (cart == null)
         {
@@ -207,7 +211,8 @@ public class CartService : ICartService
         await _context.Entry(cart)
             .Collection(c => c.CartItems)
             .Query()
-            .Include(ci => ci.Product)
+            .Include(ci => ci.Product).ThenInclude(p => p.Store)
+            .Include(ci => ci.Product).ThenInclude(p => p.Inventory)
             .LoadAsync();
 
         await _context.Entry(cart)
@@ -219,16 +224,19 @@ public class CartService : ICartService
     private static CartResponse BuildCartResponse(Cart cart)
     {
         var items = cart.CartItems
-            .Where(ci => ci.Product != null)
-            .Select(ci => new CartItemResponse(
-                ci.Id,
-                ci.ProductId,
-                ci.Product.Name,
-                ci.Product.Sku,
-                ci.Product.Price,
-                ci.Quantity,
-                ci.Product.Price * ci.Quantity
-            )).ToList();
+        .Where(ci => ci.Product != null)
+        .Select(ci => new CartItemResponse(
+            ci.Id,
+            ci.ProductId,
+            ci.Product.Name,
+            ci.Product.Sku,
+            ci.Product.Price,
+            ci.Quantity,
+            ci.Product.Price * ci.Quantity,
+            ci.Product.StoreId,
+            ci.Product.Store.Name,
+            ci.Product.Inventory?.QuantityInStock ?? 0
+        )).ToList();
 
         var subtotal = items.Sum(i => i.LineTotal);
         var discountPercentage = cart.Coupon?.DiscountPercentage ?? 0;
