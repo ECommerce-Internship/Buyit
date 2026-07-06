@@ -48,5 +48,34 @@ services:
     profiles:
       - dev
 
+  buyit-mcp:
+    build:
+      context: .
+      dockerfile: Buyit.MCP.Dockerfile
+    container_name: buyit-mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Redis: "redis:6379,abortConnect=false"
+      Gemini__ApiKey: "${GEMINI_API_KEY}"
+      # Secrets injected at runtime — never baked into the image (see .env).
+      Jwt__Secret: "${JWT_SECRET}"
+      Mcp__SharedSecret: "${MCP_SHARED_SECRET}"
+    # Bound to loopback only: reachable from THIS host for local dev/debugging, but NOT exposed
+    # to the network. Containers on the compose network still reach it via http://buyit-mcp:8080.
+    ports:
+      - "127.0.0.1:5100:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
 volumes:
   postgres_data:

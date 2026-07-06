@@ -151,6 +151,12 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
 builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
 builder.Services.Configure<ChatHistorySettings>(builder.Configuration.GetSection("ChatHistory"));
+// TB-103: pooled HttpClient for the MCP HTTP transport. A factory-managed client reuses its
+// socket handler across chat messages (avoids per-request HttpClient socket exhaustion).
+builder.Services.AddHttpClient(McpConnector.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 builder.Services.AddScoped<IMcpConnector, McpConnector>();
 builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
 builder.Services.AddScoped<IChatService, ChatService>();
