@@ -35,7 +35,10 @@ public class DashboardService : IDashboardService
         var cached = await _cache.GetAsync<DashboardSummaryResponse>(key);
         if (cached is not null) return cached;
 
-        var today = DateTime.UtcNow.Date;
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var d30 = now.AddDays(-30);   // start of the current rolling 30-day window
+        var d60 = now.AddDays(-60);   // start of the prior 30-day window
         DashboardSummaryResponse result;
 
         if (sellerUserId is null)
@@ -51,7 +54,24 @@ public class DashboardService : IDashboardService
             var todays = await _db.Orders.CountAsync(o => o.OrderDate >= today);
             var commission = await _db.StoreOrders.SumAsync(so => (decimal?)so.CommissionAmount) ?? 0m;
 
-            result = new DashboardSummaryResponse(totalRevenue, totalOrders, totalCustomers, lowStock, todays, commission);
+            // Rolling 30-day revenue (paid payments) vs. the prior 30 days.
+            var revenue30d = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Paid && p.PaidAt >= d30)
+                .SumAsync(p => (decimal?)p.Amount) ?? 0m;
+            var revenuePrev = await _db.Payments
+                .Where(p => p.Status == PaymentStatus.Paid && p.PaidAt >= d60 && p.PaidAt < d30)
+                .SumAsync(p => (decimal?)p.Amount) ?? 0m;
+
+            var orders30d = await _db.Orders.CountAsync(o => o.OrderDate >= d30);
+            var ordersPrev = await _db.Orders.CountAsync(o => o.OrderDate >= d60 && o.OrderDate < d30);
+
+            var avgRating = await AverageRatingAsync(sellerUserId);
+
+            result = new DashboardSummaryResponse(
+                totalRevenue, totalOrders, totalCustomers, lowStock, todays, commission,
+                revenue30d, GrowthPct(revenue30d, revenuePrev),
+                orders30d, GrowthPct(orders30d, ordersPrev),
+                avgRating);
         }
         else
         {
@@ -64,8 +84,24 @@ public class DashboardService : IDashboardService
                                  && i.Product.Store.OwnerUserId == sellerUserId
                                  && i.QuantityInStock <= i.LowStockThreshold);
             var todays = await so.Where(x => x.Order.OrderDate >= today).Select(x => x.OrderId).Distinct().CountAsync();
+
+            // Rolling 30-day revenue (own subtotals) vs. the prior 30 days.
+            var revenue30d = await so.Where(x => x.Order.OrderDate >= d30).SumAsync(x => (decimal?)x.SubTotal) ?? 0m;
+            var revenuePrev = await so.Where(x => x.Order.OrderDate >= d60 && x.Order.OrderDate < d30)
+                .SumAsync(x => (decimal?)x.SubTotal) ?? 0m;
+
+            var orders30d = await so.Where(x => x.Order.OrderDate >= d30).Select(x => x.OrderId).Distinct().CountAsync();
+            var ordersPrev = await so.Where(x => x.Order.OrderDate >= d60 && x.Order.OrderDate < d30)
+                .Select(x => x.OrderId).Distinct().CountAsync();
+
+            var avgRating = await AverageRatingAsync(sellerUserId);
+
             // TotalCustomers/commission aren't meaningful for a single seller -> 0 / null.
-            result = new DashboardSummaryResponse(revenue, orders, 0, lowStock, todays, null);
+            result = new DashboardSummaryResponse(
+                revenue, orders, 0, lowStock, todays, null,
+                revenue30d, GrowthPct(revenue30d, revenuePrev),
+                orders30d, GrowthPct(orders30d, ordersPrev),
+                avgRating);
         }
 
         await _cache.SetAsync(key, result, Ttl);
@@ -127,29 +163,56 @@ public class DashboardService : IDashboardService
         var cached = await _cache.GetAsync<List<PeriodPointResponse>>(key);
         if (cached is not null) return cached;
 
-        // Pull minimal rows from the DB, then bucket in memory.
+        // A range token ("1d".."1y") resolves to a rolling window + a sensible bucket size;
+        // legacy tokens ("day"/"week"/"month") keep the old full-history behaviour (Start == null).
+        var now = DateTime.UtcNow;
+        var (start, bucket, step) = ResolveRange(period, now);
+
+        // Pull minimal rows from the DB (filtered to the window when there is one), then bucket in memory.
         List<(DateTime When, decimal Amount)> raw;
         if (sellerUserId is null)
         {
-            raw = (await _db.Payments
-                .Where(p => p.Status == PaymentStatus.Paid && p.PaidAt != null)
-                .Select(p => new { p.PaidAt, p.Amount })
-                .ToListAsync())
+            var q = _db.Payments.Where(p => p.Status == PaymentStatus.Paid && p.PaidAt != null);
+            if (start is not null) q = q.Where(p => p.PaidAt >= start);
+            raw = (await q.Select(p => new { p.PaidAt, p.Amount }).ToListAsync())
                 .Select(x => (x.PaidAt!.Value, x.Amount)).ToList();
         }
         else
         {
-            raw = (await StoreOrders(sellerUserId)
-                .Select(so => new { so.Order.OrderDate, so.SubTotal })
-                .ToListAsync())
+            var q = StoreOrders(sellerUserId);
+            if (start is not null) q = q.Where(so => so.Order.OrderDate >= start);
+            raw = (await q.Select(so => new { so.Order.OrderDate, so.SubTotal }).ToListAsync())
                 .Select(x => (x.OrderDate, x.SubTotal)).ToList();
         }
 
-        var result = raw
-            .GroupBy(r => BucketLabel(r.When, period))
-            .Select(g => new PeriodPointResponse(g.Key, g.Sum(x => x.Amount)))
-            .OrderBy(p => p.Period)
-            .ToList();
+        var sums = raw
+            .GroupBy(r => BucketLabel(r.When, bucket))
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+
+        List<PeriodPointResponse> result;
+        if (start is not null)
+        {
+            // Zero-fill every bucket across the window so the series is a continuous line
+            // (a single payment shows a trend, not one lonely dot). Walk the window at `step`
+            // resolution and keep each distinct bucket label in chronological order.
+            var labels = new List<string>();
+            var seen = new HashSet<string>();
+            for (var t = start.Value; t <= now; t = t.Add(step))
+            {
+                var lbl = BucketLabel(t, bucket);
+                if (seen.Add(lbl)) labels.Add(lbl);
+            }
+            result = labels
+                .Select(l => new PeriodPointResponse(l, sums.TryGetValue(l, out var v) ? v : 0m))
+                .ToList();
+        }
+        else
+        {
+            result = sums
+                .Select(kv => new PeriodPointResponse(kv.Key, kv.Value))
+                .OrderBy(p => p.Period)
+                .ToList();
+        }
 
         await _cache.SetAsync(key, result, Ttl);
         return result;
@@ -191,9 +254,43 @@ public class DashboardService : IDashboardService
         return new AdminDashboardResponse(summary, revenue, byStatus, topProducts, newCustomers);
     }
 
-    // Turns a timestamp into a bucket label for the requested period.
+    // Average product rating, rounded to 1 dp. Null when there are no reviews (empty set).
+    // Admin scope = all reviews; seller scope = reviews on the seller's own products only.
+    private async Task<decimal?> AverageRatingAsync(int? sellerUserId)
+    {
+        var reviews = _db.Reviews.AsQueryable();
+        if (sellerUserId is not null)
+            reviews = reviews.Where(r => r.Product.Store.OwnerUserId == sellerUserId);
+
+        // (double?) makes AVG over an empty set return null instead of throwing.
+        var avg = await reviews.AverageAsync(r => (double?)r.Rating);
+        return avg is null ? null : Math.Round((decimal)avg.Value, 1);
+    }
+
+    // Percentage change from a prior value to a current one, rounded to 1 dp.
+    // Null when the prior window is zero (no meaningful baseline to grow from).
+    private static decimal? GrowthPct(decimal current, decimal prior)
+        => prior == 0m ? null : Math.Round((current - prior) / prior * 100m, 1);
+
+    // Maps a range token to a rolling-window start, the bucket granularity to group by, and the
+    // step to walk the window when zero-filling. Legacy tokens ("day"/"week"/"month") return a
+    // null start -> no window, full history, matching the original behaviour.
+    private static (DateTime? Start, string Bucket, TimeSpan Step) ResolveRange(string? token, DateTime now) =>
+        token?.ToLowerInvariant() switch
+        {
+            "1d" => (now.AddDays(-1), "hour", TimeSpan.FromHours(1)),
+            "15d" => (now.AddDays(-15), "day", TimeSpan.FromDays(1)),
+            "30d" => (now.AddDays(-30), "day", TimeSpan.FromDays(1)),
+            "3m" => (now.AddDays(-90), "week", TimeSpan.FromDays(1)),
+            "6m" => (now.AddDays(-180), "month", TimeSpan.FromDays(1)),
+            "1y" => (now.AddDays(-365), "month", TimeSpan.FromDays(1)),
+            _ => (null, token ?? "month", TimeSpan.FromDays(1)),   // legacy: no window
+        };
+
+    // Turns a timestamp into a bucket label for the requested granularity.
     private static string BucketLabel(DateTime dt, string period) => period?.ToLowerInvariant() switch
     {
+        "hour" => dt.ToString("yyyy-MM-dd HH:00"),
         "day" => dt.ToString("yyyy-MM-dd"),
         "week" => $"{System.Globalization.ISOWeek.GetYear(dt)}-W{System.Globalization.ISOWeek.GetWeekOfYear(dt):D2}",
         _ => dt.ToString("yyyy-MM")   // "month" (default)

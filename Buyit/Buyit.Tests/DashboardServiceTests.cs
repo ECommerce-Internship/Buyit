@@ -123,6 +123,54 @@ public class DashboardServiceTests
     }
 
     [Fact]
+    public async Task GetSummary_Admin_IncludesRolling30dAndAvgRating()
+    {
+        var sut = BuildSut(out var db);
+        await SeedAsync(db);
+
+        // The seeded order/payment is dated "now", so it lands in the current 30-day window.
+        // Add two product reviews (5 and 3) -> average 4.0.
+        var prod = await db.Products.FirstAsync();
+        db.Reviews.AddRange(
+            new Review { ProductId = prod.Id, UserId = (await db.Users.FirstAsync()).Id, Rating = 5 },
+            new Review { ProductId = prod.Id, UserId = (await db.Users.FirstAsync()).Id, Rating = 3 });
+        await db.SaveChangesAsync();
+
+        var summary = await sut.GetSummaryAsync(null);
+
+        summary.Revenue30d.Should().Be(100m);              // the one paid payment is within 30 days
+        summary.Orders30d.Should().Be(1);
+        summary.RevenueGrowthPct.Should().BeNull();        // no prior-window revenue to grow from
+        summary.AvgRating.Should().Be(4.0m);               // (5 + 3) / 2
+    }
+
+    [Fact]
+    public async Task GetSummary_NoReviews_AvgRatingIsNull()
+    {
+        var sut = BuildSut(out var db);
+        await SeedAsync(db);   // seeds no reviews
+
+        var summary = await sut.GetSummaryAsync(null);
+
+        summary.AvgRating.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRevenue_30dRange_ZeroFillsContinuousDailySeries()
+    {
+        var sut = BuildSut(out var db);
+        await SeedAsync(db);   // one paid $100 payment dated "now"
+
+        var series = await sut.GetRevenueByPeriodAsync("30d", null);
+
+        // A 30-day window at daily granularity is a continuous line, not a lone point.
+        series.Count.Should().BeGreaterThan(20);
+        series.Sum(p => p.Value).Should().Be(100m);         // total revenue preserved
+        series[^1].Value.Should().Be(100m);                 // today's bucket carries the payment
+        series.Should().Contain(p => p.Value == 0m);        // earlier days zero-filled
+    }
+
+    [Fact]
     public async Task GetAdminDashboard_ReturnsAllSections()
     {
         var sut = BuildSut(out var db);
