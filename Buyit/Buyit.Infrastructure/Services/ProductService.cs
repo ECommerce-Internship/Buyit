@@ -103,8 +103,20 @@ public class ProductService : IProductService
         // The global query filter in AppDbContext already excludes IsDeleted == true.
         IQueryable<Product> products = _db.Products;
 
-        // Marketplace (TB-124): public browsing shows only products from APPROVED stores.
-        products = products.Where(p => p.Store.Status == StoreStatus.Approved);
+        if (query.StoreId is not null)
+        {
+            // Management view (a seller's own store, or an admin managing any store): bypass
+            // the public "Approved only" restriction below — the caller needs to see products
+            // from a Pending/Suspended store too — but ONLY if they actually own this store
+            // (or are an admin). Throws 403 otherwise.
+            await EnsureCanManageStoreAsync(query.StoreId.Value);
+            products = products.Where(p => p.StoreId == query.StoreId.Value);
+        }
+        else
+        {
+            // Marketplace (TB-124): public browsing shows only products from APPROVED stores.
+            products = products.Where(p => p.Store.Status == StoreStatus.Approved);
+        }
 
         // STAGE 2 — FILTERING. Each filter is applied ONLY if the client supplied it.
         if (!string.IsNullOrWhiteSpace(query.Search))

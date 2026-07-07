@@ -11,6 +11,8 @@ public class ProductQueryParameters
     public int? CategoryId { get; set; }       // null = any category
     public decimal? MinPrice { get; set; }     // null = no lower bound
     public decimal? MaxPrice { get; set; }     // null = no upper bound
+    public int? StoreId { get; set; }          // when set: scope to ONE store (seller/admin management view)
+
 
     // ---------- SORTING ----------
     // Allowed values: "name", "price", "createdAt". Anything else falls back to a default.

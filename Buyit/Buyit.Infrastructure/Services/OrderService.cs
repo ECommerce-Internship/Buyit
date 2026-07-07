@@ -315,7 +315,7 @@ public class OrderService : IOrderService
         var items = await query
             .Skip((page - 1) * pageSize).Take(pageSize)
             .Select(so => new StoreOrderResponse(
-                so.Id, so.StoreId, so.Store.Name, so.Status.ToString(),
+                so.Id, so.Order.Id, so.Order.OrderDate, so.StoreId, so.Store.Name, so.Status.ToString(),
                 so.SubTotal, so.CommissionAmount, so.SellerNetAmount,
                 so.StoreOrderItems.Select(i => new StoreOrderItemResponse(
                     i.Id, i.ProductId, i.ProductNameSnapshot, i.UnitPrice, i.Quantity, i.Subtotal))))
@@ -457,11 +457,11 @@ public class OrderService : IOrderService
         order.ShippingState, order.ShippingCountry,
         order.Payment != null ? order.Payment.Status.ToString() : null,
         order.StoreOrders.Select(so => new StoreOrderResponse(
-            so.Id, so.StoreId, so.Store?.Name ?? string.Empty, so.Status.ToString(),
+            so.Id, order.Id, order.OrderDate, so.StoreId, so.Store?.Name ?? string.Empty, so.Status.ToString(),
             so.SubTotal, so.CommissionAmount, so.SellerNetAmount,
             so.StoreOrderItems.Select(i => new StoreOrderItemResponse(
                 i.Id, i.ProductId, i.ProductNameSnapshot, i.UnitPrice, i.Quantity, i.Subtotal))))
-    );
+        );
 
     // M2: clamp paging so a caller can't request an unbounded page (resource-exhaustion DoS).
     private const int MaxPageSize = 50;

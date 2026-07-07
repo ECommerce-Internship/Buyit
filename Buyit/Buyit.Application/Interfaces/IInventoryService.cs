@@ -9,4 +9,5 @@ public interface IInventoryService
     Task<InventoryResponse> UpdateStockAsync(int productId, int newQuantity);
     Task<IEnumerable<InventoryResponse>> GetLowStockAsync();
     Task<InventoryResponse> UpdateThresholdAsync(int productId, int newThreshold);
+    Task<IEnumerable<InventoryResponse>> GetByStoreAsync(int storeId);
 }
