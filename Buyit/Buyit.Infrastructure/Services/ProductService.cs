@@ -121,8 +121,16 @@ public class ProductService : IProductService
         // STAGE 2 — FILTERING. Each filter is applied ONLY if the client supplied it.
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            // Contains => SQL "LIKE '%term%'": product name includes the search text.
-            products = products.Where(p => p.Name.Contains(query.Search));
+            // Tokenised, case-INSENSITIVE match. We split the search into words and require EACH
+            // word to appear in the name (in any order). EF.Functions.ILike => Postgres "ILIKE",
+            // the case-insensitive form of LIKE. This means "laptop", "LAPTOP" and "15-inch laptop"
+            // all match a product named "Laptop 15-inch" — plain .Contains() (LIKE) is case-SENSITIVE
+            // and whole-phrase only, so those queries returned nothing (TB bot-fix).
+            foreach (var term in query.Search.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var pattern = $"%{term}%";
+                products = products.Where(p => EF.Functions.ILike(p.Name, pattern));
+            }
         }
 
         if (query.CategoryId is not null)
@@ -287,7 +295,14 @@ public class ProductService : IProductService
         IQueryable<Product> products = _db.Products.Where(p => p.StoreId == store.Id);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
-            products = products.Where(p => p.Name.Contains(query.Search));
+        {
+            // Case-insensitive, tokenised match (same as GetAllAsync — see the comment there).
+            foreach (var term in query.Search.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var pattern = $"%{term}%";
+                products = products.Where(p => EF.Functions.ILike(p.Name, pattern));
+            }
+        }
         if (query.CategoryId is not null)
             products = products.Where(p => p.CategoryId == query.CategoryId);
         if (query.MinPrice is not null)

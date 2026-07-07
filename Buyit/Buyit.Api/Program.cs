@@ -175,8 +175,8 @@ builder.Services.AddScoped<IMcpConnector, McpConnector>();
 builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
 builder.Services.AddScoped<IChatService, ChatService>();
 
-// Each chat message spawns an MCP child process and calls the paid Gemini API, so throttle the
-// "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
+// Each chat message opens an HTTP session to the MCP service (TB-103) and calls the paid Gemini
+// API, so throttle the "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
 // caller's "sub" claim, no queue (excess -> 429). Uses AddPolicy so we can partition by user —
 // AddSlidingWindowLimiter alone would create a single shared bucket. No new libraries: this is
 // the built-in System.Threading.RateLimiting / Microsoft.AspNetCore.RateLimiting.
