@@ -92,24 +92,27 @@ public class ProductService : IProductService
 
     public async Task<PaginatedResult<ProductResponse>> GetAllAsync(ProductQueryParameters query)
     {
+        // Authorization MUST run on every call, before any cache lookup. The cache key is built
+        // from the query shape, not the caller's identity — so checking this only on a cache
+        // miss would let one seller's legitimately-cached page get served to a DIFFERENT caller
+        // who doesn't own that store at all, with no ownership check ever executing.
+        if (query.StoreId is not null)
+            await EnsureCanManageStoreAsync(query.StoreId.Value);
+
         // --- CACHE-ASIDE (read): try the cache before touching the database. ---
         string cacheKey = BuildListCacheKey(query);
         var cached = await _cache.GetAsync<PaginatedResult<ProductResponse>>(cacheKey);
         if (cached is not null)
             return cached;   // HIT: return the saved page; DB is never queried.
-
         _logger.LogInformation("Querying DATABASE for products list (key {CacheKey})", cacheKey);
         // STAGE 1 — start the query. Nothing runs yet; this is an IQueryable (a plan).
         // The global query filter in AppDbContext already excludes IsDeleted == true.
         IQueryable<Product> products = _db.Products;
-
         if (query.StoreId is not null)
         {
             // Management view (a seller's own store, or an admin managing any store): bypass
             // the public "Approved only" restriction below — the caller needs to see products
-            // from a Pending/Suspended store too — but ONLY if they actually own this store
-            // (or are an admin). Throws 403 otherwise.
-            await EnsureCanManageStoreAsync(query.StoreId.Value);
+            // from a Pending/Suspended store too. Ownership was already checked above.
             products = products.Where(p => p.StoreId == query.StoreId.Value);
         }
         else
@@ -785,9 +788,13 @@ public class ProductService : IProductService
     {
         // 1) Glue every parameter into one string. The '|' separators keep fields apart so
         //    (Search="a", City="b") can never collide with (Search="ab", City="").
+        //    StoreId MUST be included — otherwise a seller-scoped request (StoreId=5) and the
+        //    public marketplace's unscoped request (StoreId=null), or another seller's StoreId,
+        //    can hash to the SAME key when the rest of the params match, leaking one context's
+        //    cached page into a completely different caller.
         string raw =
-            $"{q.Search}|{q.CategoryId}|{q.MinPrice}|{q.MaxPrice}|" +
-            $"{q.SortBy}|{q.SortDescending}|{q.Page}|{q.PageSize}";
+            $"{q.StoreId}|{q.Search}|{q.CategoryId}|{q.MinPrice}|{q.MaxPrice}|" +
+            $"{q.SortBy}|{q.SortDescending}|{q.Page}|{q.PageSize}"; 
 
         // 2) Hash that string into a short, fixed-length, safe fingerprint (SHA-256).
         byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));

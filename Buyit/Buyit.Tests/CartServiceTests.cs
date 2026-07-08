@@ -46,6 +46,20 @@ public class CartServiceTests
     private static async Task<Product> SeedProductAsync(AppDbContext db, int stock)
     {
         db.Categories.Add(new Category { Id = 1, Name = "Test Category" });
+
+        // Every product requires a Store in real data (ProductService.CreateAsync always sets
+        // one) — seed one here too, otherwise Product.Store stays null and BuildCartResponse's
+        // ci.Product.Store.Name throws a NullReferenceException that could never happen for real.
+        var store = new Store
+        {
+            Name = "Test Store",
+            Slug = $"test-store-{Guid.NewGuid()}",
+            Status = StoreStatus.Approved,
+            OwnerUserId = 1
+        };
+        db.Stores.Add(store);
+        await db.SaveChangesAsync();
+
         var product = new Product
         {
             Name = "Wireless Mouse",
@@ -53,6 +67,7 @@ public class CartServiceTests
             Sku = $"SKU-{Guid.NewGuid()}",
             Price = 19.99m,
             CategoryId = 1,
+            StoreId = store.Id,
             Inventory = new Inventory { QuantityInStock = stock, LowStockThreshold = 5 }
         };
         db.Products.Add(product);
