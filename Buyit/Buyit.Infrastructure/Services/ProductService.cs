@@ -792,9 +792,9 @@ public class ProductService : IProductService
         //    public marketplace's unscoped request (StoreId=null), or another seller's StoreId,
         //    can hash to the SAME key when the rest of the params match, leaking one context's
         //    cached page into a completely different caller.
-        stringraw =
+        string raw =
             $"{q.StoreId}|{q.Search}|{q.CategoryId}|{q.MinPrice}|{q.MaxPrice}|" +
-            $"{q.SortBy}|{q.SortDescending}|{q.Page}|{q.PageSize}";
+            $"{q.SortBy}|{q.SortDescending}|{q.Page}|{q.PageSize}"; 
 
         // 2) Hash that string into a short, fixed-length, safe fingerprint (SHA-256).
         byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
