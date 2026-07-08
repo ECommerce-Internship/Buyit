@@ -18,6 +18,24 @@ public class ChatService : IChatService
     // Hard cap on Gemini<->tool round-trips per message, so the loop always terminates.
     private const int MaxToolRounds = 5;
 
+    // System instruction sent on every Gemini call: grounds the model's role and tells it to use
+    // the conversation history and act on confirmations. Without this the model has no persona and
+    // may ignore context (e.g. answering "yes" as if it were a brand-new request).
+    private const string SystemInstruction =
+        "You are Buyit's friendly shopping assistant. Always use the conversation history for " +
+        "context. When the user confirms a previous suggestion (e.g. replies 'yes'), carry out " +
+        "that action using the appropriate tool rather than asking again. Use search_products to " +
+        "check the catalogue: a product is IN STOCK when its quantityInStock is greater than 0, " +
+        "and only say a product is unavailable after a search actually returns no results. " +
+        "You can manage the cart with add_to_cart, update_cart_item, remove_from_cart, clear_cart, " +
+        "apply_coupon and remove_coupon, and place an order with checkout. Checkout needs a full " +
+        "shipping address (line 1, city, state, postal code and country); ask the user for any missing " +
+        "address fields before calling it. IMPORTANT: always confirm with the user — restating exactly " +
+        "what will happen — BEFORE you checkout, clear the cart, or remove an item; adding items or " +
+        "applying a coupon may be done directly. Never invent product IDs, prices, coupon codes or " +
+        "addresses: rely on tool results or ask the user. After helping, you may briefly suggest one " +
+        "relevant next step or related product, but keep it short.";
+
     // Tools a non-admin (Customer/Seller) may use. Everything not listed here is admin-only.
     // Allowlist, not blocklist: a newly-added tool is denied to customers until explicitly added.
     private static readonly HashSet<string> NonAdminTools = new(StringComparer.OrdinalIgnoreCase)
@@ -28,6 +46,12 @@ public class ChatService : IChatService
         "get_my_orders",         // TB-100: self-scoped order history (no userId param)
         "add_to_cart",           // TB-100: adds to the caller's own cart
         "view_cart",             // TB-100: reads the caller's own cart
+        "update_cart_item",      // change quantity of an item in the caller's own cart
+        "remove_from_cart",      // remove one item from the caller's own cart
+        "clear_cart",            // empty the caller's own cart
+        "apply_coupon",          // apply a discount code to the caller's own cart
+        "remove_coupon",         // remove the coupon from the caller's own cart
+        "checkout",              // place an order from the caller's own cart (self-scoped)
     };
 
     // Argument names the model must NEVER control (the CALLER's own identity). We delete these
@@ -95,118 +119,139 @@ public class ChatService : IChatService
         // callerId, so another user's conversationId can never resolve to this user's history.
         var history = await _conversationStore.GetAsync(conversation, callerId, cancellationToken);
 
-        // 1) Connect to the MCP server and learn its tools (Parts 3 & 4).
-        //    'await using' guarantees the child process is shut down when we leave this method.
-        await using var mcp = await _mcpConnector.ConnectAsync(callerId, callerRole, cancellationToken);
-        var allTools = await mcp.ListToolsAsync(cancellationToken);
-        var allowedTools = GetToolsForRole(callerRole, allTools);
-        var toolsPayload = BuildToolsPayload(allowedTools);
-
-        // 2) Seed the conversation: prior turns first (so Gemini has context), then the new message.
-        var contents = new List<object>();
-        foreach (var turn in history)
-            contents.Add(new { role = turn.Role, parts = new object[] { new { text = turn.Text } } });
-        contents.Add(new { role = "user", parts = new object[] { new { text = request.message } } });
-
-        // Remembers the most recent tool output, surfaced if we hit the round cap.
-        var lastToolOutput = string.Empty;
-
-        // 3) The function-calling loop — capped at MaxToolRounds tool round-trips.
-        for (var round = 0; round < MaxToolRounds; round++)
+        // The whole tool + AI pipeline is wrapped so that a transient MCP/Gemini failure still
+        // records the user's turn (paired with an apology to keep the user/model alternation
+        // intact), preserving conversation context for the next message. SaveAsync fails open,
+        // so this is best-effort, and we rethrow so the middleware still returns the real error.
+        try
         {
-            var requestBody = new { contents, tools = toolsPayload };
-            var rawBody = await CallGeminiAsync(requestBody, cancellationToken);
+            // 1) Connect to the MCP server and learn its tools (Parts 3 & 4).
+            //    'await using' closes the pooled HTTP session to the MCP HTTP service when we leave
+            //    this method (HTTP transport, TB-103 — there is no child process).
+            await using var mcp = await _mcpConnector.ConnectAsync(callerId, callerRole, cancellationToken);
+            var allTools = await mcp.ListToolsAsync(cancellationToken);
+            var allowedTools = GetToolsForRole(callerRole, allTools);
+            var toolsPayload = BuildToolsPayload(allowedTools);
 
-            // Parse this round's reply. Anything we keep past this block must be .Clone()d.
-            string? textAnswer = null;
-            JsonElement functionCall = default;
-            bool hasFunctionCall = false;
+            // 2) Seed the conversation: prior turns first (so Gemini has context), then the new message.
+            var contents = new List<object>();
+            foreach (var turn in history)
+                contents.Add(new { role = turn.Role, parts = new object[] { new { text = turn.Text } } });
+            contents.Add(new { role = "user", parts = new object[] { new { text = request.message } } });
 
-            try
+            // Remembers the most recent tool output, surfaced if we hit the round cap.
+            var lastToolOutput = string.Empty;
+
+            // 3) The function-calling loop — capped at MaxToolRounds tool round-trips.
+            for (var round = 0; round < MaxToolRounds; round++)
             {
-                using var doc = JsonDocument.Parse(rawBody);
-                var modelContent = doc.RootElement
-                    .GetProperty("candidates")[0]
-                    .GetProperty("content");
-
-                foreach (var part in modelContent.GetProperty("parts").EnumerateArray())
+                // system_instruction grounds the model's role and tells it to use the history (see
+                // SystemInstruction). Sent on every round so it applies to tool follow-ups too.
+                var requestBody = new
                 {
-                    if (part.TryGetProperty("functionCall", out var fc))
+                    system_instruction = new { parts = new object[] { new { text = SystemInstruction } } },
+                    contents,
+                    tools = toolsPayload
+                };
+                var rawBody = await CallGeminiAsync(requestBody, cancellationToken);
+
+                // Parse this round's reply. Anything we keep past this block must be .Clone()d.
+                string? textAnswer = null;
+                JsonElement functionCall = default;
+                bool hasFunctionCall = false;
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(rawBody);
+                    var modelContent = doc.RootElement
+                        .GetProperty("candidates")[0]
+                        .GetProperty("content");
+
+                    foreach (var part in modelContent.GetProperty("parts").EnumerateArray())
                     {
-                        functionCall = fc.Clone();   // keep it alive past the 'using'
-                        hasFunctionCall = true;
-                        break;                        // handle one tool call per round
+                        if (part.TryGetProperty("functionCall", out var fc))
+                        {
+                            functionCall = fc.Clone();   // keep it alive past the 'using'
+                            hasFunctionCall = true;
+                            break;                        // handle one tool call per round
+                        }
+
+                        if (part.TryGetProperty("text", out var textElement))
+                            textAnswer = textElement.GetString();
                     }
-
-                    if (part.TryGetProperty("text", out var textElement))
-                        textAnswer = textElement.GetString();
                 }
-            }
-            catch (Exception ex) when (ex is JsonException or KeyNotFoundException
-                                           or IndexOutOfRangeException or InvalidOperationException)
-            {
-                _logger.LogWarning(ex, "Unexpected Gemini envelope shape.");
-                throw new ExternalServiceException("The AI service returned an unexpected response.", ex);
-            }
-
-            // 3a) No tool requested → Gemini gave its final answer. We're done.
-            if (!hasFunctionCall)
-            {
-                var reply = string.IsNullOrWhiteSpace(textAnswer)
-                    ? "Sorry, I couldn't produce an answer."
-                    : textAnswer!;
-                await PersistTurnAsync(conversation, callerId, history, request.message, reply, cancellationToken);
-                return new ChatResponse(reply, conversation);
-            }
-
-            // 3b) A tool was requested. Echo the model's functionCall turn back into history.
-            var toolName = functionCall.GetProperty("name").GetString() ?? string.Empty;
-
-            // Defence in depth. Only reject with 403 when the tool REALLY EXISTS but was filtered
-            // out for this role — that is a genuine authorization boundary. A name that exists for
-            // nobody is a model hallucination, not a permissions issue, so let it fall through to
-            // CallMcpToolAsync and surface as a 502 (unchanged from before).
-            var isRealTool = allTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
-            var isAllowed = allowedTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
-            if (isRealTool && !isAllowed)
-            {
-                _logger.LogWarning(
-                    "Model requested tool '{Tool}' not permitted for role '{Role}'.", toolName, callerRole);
-                throw new ForbiddenException($"The tool '{toolName}' is not available to you.");
-            }
-
-            var toolArgs = functionCall.TryGetProperty("args", out var a) ? a : default;
-
-            contents.Add(new
-            {
-                role = "model",
-                parts = new object[] { new { functionCall } }
-            });
-
-            // 3c) Run the real tool via MCP and add its result as a functionResponse turn.
-            var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, callerId, cancellationToken);
-            lastToolOutput = toolOutput;
-
-            contents.Add(new
-            {
-                role = "user",
-                parts = new object[]
+                catch (Exception ex) when (ex is JsonException or KeyNotFoundException
+                                               or IndexOutOfRangeException or InvalidOperationException)
                 {
-                    new { functionResponse = new { name = toolName, response = new { result = toolOutput } } }
+                    _logger.LogWarning(ex, "Unexpected Gemini envelope shape.");
+                    throw new ExternalServiceException("The AI service returned an unexpected response.", ex);
                 }
-            });
 
-            // loop again so Gemini can react to the tool output
+                // 3a) No tool requested → Gemini gave its final answer. We're done.
+                if (!hasFunctionCall)
+                {
+                    var reply = string.IsNullOrWhiteSpace(textAnswer)
+                        ? "Sorry, I couldn't produce an answer."
+                        : textAnswer!;
+                    await PersistTurnAsync(conversation, callerId, history, request.message, reply, cancellationToken);
+                    return new ChatResponse(reply, conversation);
+                }
+
+                // 3b) A tool was requested. Echo the model's functionCall turn back into history.
+                var toolName = functionCall.GetProperty("name").GetString() ?? string.Empty;
+
+                // Defence in depth. Only reject with 403 when the tool REALLY EXISTS but was filtered
+                // out for this role — that is a genuine authorization boundary. A name that exists for
+                // nobody is a model hallucination, not a permissions issue, so let it fall through to
+                // CallMcpToolAsync and surface as a 502 (unchanged from before).
+                var isRealTool = allTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+                var isAllowed = allowedTools.Any(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+                if (isRealTool && !isAllowed)
+                {
+                    _logger.LogWarning(
+                        "Model requested tool '{Tool}' not permitted for role '{Role}'.", toolName, callerRole);
+                    throw new ForbiddenException($"The tool '{toolName}' is not available to you.");
+                }
+
+                var toolArgs = functionCall.TryGetProperty("args", out var a) ? a : default;
+
+                contents.Add(new
+                {
+                    role = "model",
+                    parts = new object[] { new { functionCall } }
+                });
+
+                // 3c) Run the real tool via MCP and add its result as a functionResponse turn.
+                var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, callerId, cancellationToken);
+                lastToolOutput = toolOutput;
+
+                contents.Add(new
+                {
+                    role = "user",
+                    parts = new object[]
+                    {
+                        new { functionResponse = new { name = toolName, response = new { result = toolOutput } } }
+                    }
+                });
+
+                // loop again so Gemini can react to the tool output
+            }
+
+            // 4) We used all rounds and Gemini still wanted tools. Return what we gathered.
+            _logger.LogInformation(
+                "Chat loop hit the {Cap}-round tool cap for conversation {Id}.", MaxToolRounds, conversation);
+            var cappedReply = string.IsNullOrWhiteSpace(lastToolOutput)
+                ? "I gathered some information but couldn't fully finish. Please try rephrasing."
+                : $"I gathered some information but couldn't fully finish. Here's what I found so far: {lastToolOutput}";
+            await PersistTurnAsync(conversation, callerId, history, request.message, cappedReply, cancellationToken);
+            return new ChatResponse(cappedReply, conversation);
         }
-
-        // 4) We used all rounds and Gemini still wanted tools. Return what we gathered.
-        _logger.LogInformation(
-            "Chat loop hit the {Cap}-round tool cap for conversation {Id}.", MaxToolRounds, conversation);
-        var cappedReply = string.IsNullOrWhiteSpace(lastToolOutput)
-            ? "I gathered some information but couldn't fully finish. Please try rephrasing."
-            : $"I gathered some information but couldn't fully finish. Here's what I found so far: {lastToolOutput}";
-        await PersistTurnAsync(conversation, callerId, history, request.message, cappedReply, cancellationToken);
-        return new ChatResponse(cappedReply, conversation);
+        catch (Exception ex) when (ex is ExternalServiceException or ForbiddenException)
+        {
+            await PersistTurnAsync(conversation, callerId, history, request.message,
+                "Sorry, I ran into a problem handling that. Please try again.", cancellationToken);
+            throw;
+        }
     }
 
     // Appends this exchange to the history, trims to the last N turns (windowing), and saves.

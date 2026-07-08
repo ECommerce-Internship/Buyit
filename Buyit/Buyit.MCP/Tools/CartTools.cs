@@ -41,4 +41,59 @@ public class CartTools
         var result = await _cartService.GetCartAsync(userId);
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
+
+    [McpServerTool, Description("Change the quantity of a product ALREADY in the signed-in customer's cart. Quantity must be at least 1 — to take an item out entirely, use remove_from_cart. Returns the updated cart.")]
+    public async Task<string> update_cart_item(
+        [Description("The ID of the product to update")] int productId,
+        [Description("The new quantity (at least 1)")] int quantity)
+    {
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to modify your cart.");
+
+        var result = await _cartService.UpdateItemAsync(userId, productId, new UpdateCartItemRequest(quantity));
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    [McpServerTool, Description("Remove a product entirely from the signed-in customer's cart. Returns the updated cart.")]
+    public async Task<string> remove_from_cart(
+        [Description("The ID of the product to remove")] int productId)
+    {
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to modify your cart.");
+
+        await _cartService.RemoveItemAsync(userId, productId);
+        var cart = await _cartService.GetCartAsync(userId);   // return the refreshed cart so the model can confirm
+        return JsonSerializer.Serialize(cart, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    [McpServerTool, Description("Remove ALL items from the signed-in customer's cart. This empties the cart and cannot be undone — confirm with the user before calling it.")]
+    public async Task<string> clear_cart()
+    {
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to modify your cart.");
+
+        await _cartService.ClearCartAsync(userId);
+        return JsonSerializer.Serialize(new { status = "Cart cleared." }, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    [McpServerTool, Description("Apply a coupon / discount code to the signed-in customer's cart. Returns the updated cart with the discount reflected in the total.")]
+    public async Task<string> apply_coupon(
+        [Description("The coupon code to apply, exactly as the user gave it")] string code)
+    {
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to apply a coupon.");
+
+        var result = await _cartService.ApplyCouponAsync(userId, new ApplyCouponRequest(code));
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    [McpServerTool, Description("Remove the coupon currently applied to the signed-in customer's cart. Returns the updated cart.")]
+    public async Task<string> remove_coupon()
+    {
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to change your cart.");
+
+        var result = await _cartService.RemoveCouponAsync(userId);
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
 }

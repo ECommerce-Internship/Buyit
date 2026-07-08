@@ -1,3 +1,4 @@
+using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Exceptions;
 using ModelContextProtocol.Server;
@@ -49,6 +50,25 @@ public class OrderTools
             ?? throw new UnauthorizedException("You must be signed in to view your orders.");
 
         var result = await _orderService.GetMyOrdersAsync(userId, page, pageSize);
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    [McpServerTool, Description("Place an order (checkout) for everything currently in the signed-in customer's cart, shipping to the given address. This places a REAL order and cannot be undone — ALWAYS confirm with the user before calling it, and make sure their cart is not empty. Returns the created order.")]
+    public async Task<string> checkout(
+        [Description("Shipping address line 1 (street and number)")] string shippingLine1,
+        [Description("Shipping city")] string shippingCity,
+        [Description("Shipping state or province")] string shippingState,
+        [Description("Shipping postal / ZIP code")] string shippingPostalCode,
+        [Description("Shipping country")] string shippingCountry,
+        [Description("Shipping address line 2 (optional — apartment, suite, etc.)")] string? shippingLine2 = null)
+    {
+        // Self-scoped: the order is always placed for the JWT's user; the model cannot set who it's for.
+        var userId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to place an order.");
+
+        var request = new PlaceOrderRequest(
+            shippingLine1, shippingLine2, shippingCity, shippingState, shippingPostalCode, shippingCountry);
+        var result = await _orderService.PlaceOrderAsync(userId, request);
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
 }
