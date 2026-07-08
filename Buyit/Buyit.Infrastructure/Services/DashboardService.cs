@@ -127,26 +127,31 @@ public class DashboardService : IDashboardService
         var cached = await _cache.GetAsync<List<PeriodPointResponse>>(key);
         if (cached is not null) return cached;
 
-        // Pull minimal rows from the DB, then bucket in memory.
+        var (cutoff, granularity) = ResolveRange(period);
+
+        // Pull minimal rows from the DB (scoped to the range's cutoff), then bucket in memory.
         List<(DateTime When, decimal Amount)> raw;
         if (sellerUserId is null)
         {
-            raw = (await _db.Payments
-                .Where(p => p.Status == PaymentStatus.Paid && p.PaidAt != null)
+            var paymentsQuery = _db.Payments.Where(p => p.Status == PaymentStatus.Paid && p.PaidAt != null);
+            if (cutoff is not null) paymentsQuery = paymentsQuery.Where(p => p.PaidAt >= cutoff);
+            raw = (await paymentsQuery
                 .Select(p => new { p.PaidAt, p.Amount })
                 .ToListAsync())
                 .Select(x => (x.PaidAt!.Value, x.Amount)).ToList();
         }
         else
         {
-            raw = (await StoreOrders(sellerUserId)
+            var ordersQuery = StoreOrders(sellerUserId);
+            if (cutoff is not null) ordersQuery = ordersQuery.Where(so => so.Order.OrderDate >= cutoff);
+            raw = (await ordersQuery
                 .Select(so => new { so.Order.OrderDate, so.SubTotal })
                 .ToListAsync())
                 .Select(x => (x.OrderDate, x.SubTotal)).ToList();
         }
 
         var result = raw
-            .GroupBy(r => BucketLabel(r.When, period))
+            .GroupBy(r => BucketLabel(r.When, granularity))
             .Select(g => new PeriodPointResponse(g.Key, g.Sum(x => x.Amount)))
             .OrderBy(p => p.Period)
             .ToList();
@@ -164,13 +169,14 @@ public class DashboardService : IDashboardService
         var cached = await _cache.GetAsync<List<PeriodPointResponse>>(key);
         if (cached is not null) return cached;
 
-        var dates = await _db.Users
-            .Where(u => u.Role == UserRole.Customer)
-            .Select(u => u.CreatedAt)
-            .ToListAsync();
+        var (cutoff, granularity) = ResolveRange(period);
+        var usersQuery = _db.Users.Where(u => u.Role == UserRole.Customer);
+        if (cutoff is not null) usersQuery = usersQuery.Where(u => u.CreatedAt >= cutoff);
+
+        var dates = await usersQuery.Select(u => u.CreatedAt).ToListAsync();
 
         var result = dates
-            .GroupBy(d => BucketLabel(d, period))
+            .GroupBy(d => BucketLabel(d, granularity))
             .Select(g => new PeriodPointResponse(g.Key, g.Count()))
             .OrderBy(p => p.Period)
             .ToList();
@@ -192,10 +198,27 @@ public class DashboardService : IDashboardService
     }
 
     // Turns a timestamp into a bucket label for the requested period.
-    private static string BucketLabel(DateTime dt, string period) => period?.ToLowerInvariant() switch
+    // Maps a frontend range token to a lookback cutoff + bucket granularity. Null cutoff means
+    // "no window filter" (all-time), used by the legacy "month" default so nothing else breaks.
+    private static (DateTime? CutoffUtc, string Granularity) ResolveRange(string range) => range?.ToLowerInvariant() switch
     {
+        "1d" => (DateTime.UtcNow.AddDays(-1), "hour"),
+        "15d" => (DateTime.UtcNow.AddDays(-15), "day"),
+        "30d" => (DateTime.UtcNow.AddDays(-30), "day"),
+        "3m" => (DateTime.UtcNow.AddMonths(-3), "week"),
+        "6m" => (DateTime.UtcNow.AddMonths(-6), "month"),
+        "1y" => (DateTime.UtcNow.AddYears(-1), "month"),
+        "day" => (null, "day"),
+        "week" => (null, "week"),
+        _ => (null, "month"),   // "month" (default) — unchanged, all-time monthly buckets
+    };
+
+    // Turns a timestamp into a bucket label for the resolved granularity.
+    private static string BucketLabel(DateTime dt, string granularity) => granularity switch
+    {
+        "hour" => dt.ToString("yyyy-MM-dd HH:00"),
         "day" => dt.ToString("yyyy-MM-dd"),
         "week" => $"{System.Globalization.ISOWeek.GetYear(dt)}-W{System.Globalization.ISOWeek.GetWeekOfYear(dt):D2}",
-        _ => dt.ToString("yyyy-MM")   // "month" (default)
+        _ => dt.ToString("yyyy-MM")   // "month"
     };
 }
