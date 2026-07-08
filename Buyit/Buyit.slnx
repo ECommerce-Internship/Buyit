@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="Buyit.Api/Buyit.Api.csproj" />
+  <Project Path="Buyit.Application/Buyit.Application.csproj" />
+  <Project Path="Buyit.Domain/Buyit.Domain.csproj" />
+  <Project Path="Buyit.Infrastructure/Buyit.Infrastructure.csproj" />
+  <Project Path="Buyit.MCP/Buyit.MCP.csproj" />
+  <Project Path="Buyit.Tests/Buyit.Tests.csproj" Id="f2c240ec-c8e1-4c6d-9619-f94631d76cc4" />
+</Solution>

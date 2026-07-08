@@ -1,0 +1,43 @@
+﻿namespace Buyit.Application.DTOs;
+
+/// <summary>
+/// The safe, public shape of a product when we send it back to the client.
+/// Flat on purpose — no navigation graph, no circular references.
+/// </summary>
+public class ProductResponse
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Sku { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public string? ImageUrl { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string? SeoTitle { get; set; }
+    public string? MetaDescription { get; set; }
+
+    // Foreign key + a friendly name pulled from the joined Category.
+    public int CategoryId { get; set; }
+    public string CategoryName { get; set; } = string.Empty;
+
+    // Marketplace: which store sells this product ("sold by {StoreName}").
+    public int StoreId { get; set; }
+    public string StoreName { get; set; } = string.Empty;
+    public string StoreSlug { get; set; } = string.Empty;
+
+    // Pulled from the one-to-one Inventory record (QuantityInStock — NOT "Quantity").
+    public int QuantityInStock { get; set; }
+
+    // Computed: the mean of all this product's review ratings (0 if no reviews yet).
+    public double AverageRating { get; set; }
+
+    // Computed: how many reviews this product has (0 if none yet).
+    public int ReviewCount { get; set; }
+
+    public List<string>? Features { get; set; }
+
+    // Raw JSON straight from the DB, deserialized into Features right after the query
+    // runs (see ProductService). Not part of the public API contract.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? FeaturesJson { get; set; }
+}

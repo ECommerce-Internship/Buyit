@@ -1,0 +1,415 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using Buyit.Application.Common;
+using Buyit.Application.DTOs;
+using Buyit.Application.Interfaces;
+using Buyit.Domain.Common;
+using Buyit.Domain.Entities;
+using Buyit.Domain.Enums;
+using Buyit.Domain.Exceptions;
+using Buyit.Infrastructure.Data;
+using FluentValidation;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging; 
+using ValidationException = Buyit.Domain.Exceptions.ValidationException;
+
+namespace Buyit.Infrastructure.Services;
+
+public class AuthService : IAuthService
+{
+    private readonly AppDbContext _db;
+    private readonly IJwtTokenService _tokens;
+    private readonly IValidator<RegisterRequest> _registerValidator;
+    private readonly IValidator<RegisterSellerRequest> _registerSellerValidator;
+    private readonly IValidator<CreateStoreRequest> _createStoreValidator;
+    private readonly IValidator<UpdateProfileRequest> _updateProfileValidator;
+    private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
+    private readonly JwtSettings _jwt;
+    private readonly ILogger<AuthService> _logger;
+
+    public AuthService(
+      AppDbContext db,
+      IJwtTokenService tokens,
+      IValidator<RegisterRequest> registerValidator,
+      IValidator<RegisterSellerRequest> registerSellerValidator,
+      IValidator<CreateStoreRequest> createStoreValidator,
+      IValidator<UpdateProfileRequest> updateProfileValidator,
+      IValidator<ChangePasswordRequest> changePasswordValidator,
+      IOptions<JwtSettings> jwtOptions,
+      ILogger<AuthService> logger)
+    {
+        _db = db;
+        _tokens = tokens;
+        _registerValidator = registerValidator;
+        _registerSellerValidator = registerSellerValidator;
+        _createStoreValidator = createStoreValidator;
+        _updateProfileValidator = updateProfileValidator;
+        _changePasswordValidator = changePasswordValidator;
+        _jwt = jwtOptions.Value;
+        _logger = logger;
+    }
+
+    public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
+    {
+        // 1) Validate input -> 400 via middleware if it fails
+        var validation = await _registerValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            // Group FluentValidation errors into the shape ValidationException expects:
+            // property name -> array of messages
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Canonicalize the email so register and login (and the Google path) all
+        //    compare and store the SAME form — case/whitespace can't create duplicates.
+        var email = EmailNormalizer.Normalize(request.Email);
+
+        // 3) Reject duplicate email -> 409
+        var emailTaken = await _db.Users.AnyAsync(u => u.Email == email);
+        if (emailTaken)
+            throw new ConflictException("An account with this email already exists.");
+
+        // 4) Hash the password with BCrypt, work factor 12 (never store plaintext)
+        var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12);
+
+        // 5) Create the user as a Customer and save (SaveChanges assigns user.Id)
+        var user = new User
+        {
+            Email = email,
+            FirstName = request.FirstName,
+            LastName = request.LastName,
+            PhoneNumber = request.PhoneNumber,
+            PasswordHash = passwordHash,
+            Role = UserRole.Customer
+        };
+        _db.Users.Add(user);
+        await _db.SaveChangesAsync();
+
+        // 6) Issue tokens, persist the refresh token, return the response
+        return await IssueTokensAsync(user);
+    }
+
+    public async Task<AuthResponse> RegisterSellerAsync(RegisterSellerRequest request)
+    {
+        // 1) Validate the shape -> 400 if bad.
+        var validation = await _registerSellerValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Normalize email and reject duplicates -> 409.
+        var email = EmailNormalizer.Normalize(request.Email);
+        if (await _db.Users.AnyAsync(u => u.Email == email))
+            throw new ConflictException("An account with this email already exists.");
+
+        // 3) Build the Seller and their first Pending store TOGETHER, linked by navigation,
+        //    so a single SaveChanges inserts both rows in ONE transaction (atomic).
+        var slug = await GenerateUniqueSlugAsync(request.StoreName);
+        var user = new User
+        {
+            Email = email,
+            FirstName = request.FirstName,
+            LastName = request.LastName,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12),
+            Role = UserRole.Seller,
+            Stores = new List<Store>
+            {
+                new Store
+                {
+                    Name = request.StoreName.Trim(),
+                    Description = request.StoreDescription,
+                    Slug = slug,
+                    Status = StoreStatus.Pending,
+                    CommissionRate = Buyit.Domain.Constants.MarketplaceDefaults.CommissionRate,
+                    CreatedAt = DateTime.UtcNow
+                }
+            }
+        };
+        _db.Users.Add(user);
+        await _db.SaveChangesAsync();   // inserts User + Store atomically; assigns ids
+
+        _logger.LogInformation("Registered seller {UserId} with store {Slug}", user.Id, slug);
+
+        // 4) Issue tokens. IssueTokensAsync loads user.Stores, so the JWT carries storeIds.
+        return await IssueTokensAsync(user);
+    }
+
+    public async Task<AuthResponse> BecomeSellerAsync(int userId, CreateStoreRequest request)
+    {
+        // 1) Validate the store fields with the SAME rules as opening any store -> 400 if bad.
+        var validation = await _createStoreValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller and their existing stores (the JWT "sub" claim was already
+        //    validated by the middleware, so userId is trustworthy).
+        var user = await _db.Users
+            .Include(u => u.Stores)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Only a Customer can be UPGRADED. A Seller already has a dashboard and should use
+        //    POST /Stores to open more stores; an Admin manages the platform. Reject clearly
+        //    (409) instead of silently re-promoting or creating a stray store.
+        if (user.Role != UserRole.Customer)
+            throw new ConflictException("Only customer accounts can be upgraded to a seller account.");
+
+        // 4) Promote the role AND open the first Pending store together, so a single
+        //    SaveChanges commits both in one transaction (atomic — no half-upgraded account).
+        var slug = await GenerateUniqueSlugAsync(request.StoreName);
+        user.Role = UserRole.Seller;
+        user.Stores.Add(new Store
+        {
+            Name = request.StoreName.Trim(),
+            Description = request.StoreDescription,
+            Slug = slug,
+            Status = StoreStatus.Pending,
+            CommissionRate = Buyit.Domain.Constants.MarketplaceDefaults.CommissionRate,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // Mirrors StoreService.CreateStoreForUserAsync: the slug check-then-insert can race, so
+        // the unique index is the real backstop. Map the Postgres unique-violation (23505) to a
+        // clean 409 instead of leaking a 500.
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
+        {
+            throw new ConflictException("A store with a conflicting slug already exists. Please try again.");
+        }
+
+        _logger.LogInformation("Upgraded user {UserId} to Seller with first store {Slug}", user.Id, slug);
+
+        // 5) Issue FRESH tokens so the new role + storeIds claim take effect immediately; the
+        //    caller's old (Customer) access token is replaced client-side via login(response).
+        return await IssueTokensAsync(user);
+    }
+
+    // Generates a slug unique against the Stores.Slug index (appends -2, -3, ... if taken).
+    private async Task<string> GenerateUniqueSlugAsync(string name)
+    {
+        var baseSlug = Buyit.Domain.Helpers.SlugGenerator.Generate(name);
+        if (string.IsNullOrEmpty(baseSlug)) baseSlug = "store";
+        var slug = baseSlug;
+        var suffix = 2;
+        while (await _db.Stores.AnyAsync(s => s.Slug == slug))
+            slug = $"{baseSlug}-{suffix++}";
+        return slug;
+    }
+
+    public async Task<AuthResponse> LoginAsync(LoginRequest request)
+    {
+        // 1) Look up the user by email (normalized so casing/whitespace still matches)
+        var email = EmailNormalizer.Normalize(request.Email);
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
+
+        // 2) Same generic error for "no such user", "no password set", AND "wrong password".
+        //    The PasswordHash null-check guards Google-only accounts: BCrypt.Verify throws
+        //    on a null hash, which would otherwise surface as a 500 and leak (via 500-vs-401)
+        //    that the email exists as a Google account — a user-enumeration oracle.
+        if (user is null
+            || user.PasswordHash is null
+            || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        {
+            // LOG 5 (The Final Meaningful Log): Security Audit tracking authentication failures
+            _logger.LogWarning("Failed login attempt detected for Identity Email: {UserEmail}", request.Email);
+
+            throw new UnauthorizedException("Invalid email or password.");
+        }
+
+        // 3) Issue tokens and return
+        return await IssueTokensAsync(user);
+    }
+
+    public async Task<AuthResponse> RefreshTokenAsync(RefreshTokenRequest request)
+    {
+        // 1) Look up the refresh token by its string value, and eager-load its owning User
+        //    (.Include) because IssueTokensAsync needs the actual User object, not just an Id.
+        var existing = await _db.RefreshTokens
+            .Include(rt => rt.User)
+            .FirstOrDefaultAsync(rt => rt.Token == request.RefreshToken);
+
+        // 2) Validate — every failure is the SAME generic 401 (don't leak which check failed).
+        if (existing is null)
+            throw new UnauthorizedException("Invalid refresh token.");
+
+        if (existing.RevokedAt is not null)            // already revoked (rotated or logged out)
+            throw new UnauthorizedException("Refresh token has been revoked.");
+
+        if (existing.ExpiresAt <= DateTime.UtcNow)     // past its 7-day life
+            throw new UnauthorizedException("Refresh token has expired.");
+
+        // 3) ROTATION: kill the old token so it can never be reused.
+        //    EF Core is tracking 'existing', so this change is saved by the SaveChanges
+        //    that happens inside IssueTokensAsync below — both writes in one transaction.
+        existing.RevokedAt = DateTime.UtcNow;
+
+        // 4) Issue a brand-new access + refresh token pair for the same user, persist, return.
+        return await IssueTokensAsync(existing.User);
+    }
+
+    public async Task LogoutAsync(LogoutRequest request)
+    {
+        // Find the token. Logout is IDEMPOTENT: an unknown or already-revoked token is NOT
+        // an error — the desired end state ("this token is dead") is already true, so we
+        // simply return and let the controller send 204.
+        var existing = await _db.RefreshTokens
+            .FirstOrDefaultAsync(rt => rt.Token == request.RefreshToken);
+
+        if (existing is not null && existing.RevokedAt is null)
+        {
+            existing.RevokedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+    }
+    public async Task<UserProfileResponse> GetProfileAsync(int userId)
+    {
+        // Load the user whose id came from the validated JWT "sub" claim.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");   // token valid, but account gone -> 404
+
+        return MapToProfile(user);
+    }
+
+    public async Task<UserProfileResponse> UpdateProfileAsync(int userId, UpdateProfileRequest request)
+    {
+        // 1) Validate input -> 400 via middleware if it fails (same pattern as RegisterAsync).
+        var validation = await _updateProfileValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller's own row.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Copy ONLY the editable fields. (Email and Role are intentionally not touchable here.)
+        user.FirstName = request.FirstName;
+        user.LastName = request.LastName;
+        user.PhoneNumber = request.PhoneNumber;
+
+        // 4) Change tracking already marked 'user' Modified; one UPDATE is sent here.
+        await _db.SaveChangesAsync();
+
+        return MapToProfile(user);
+    }
+
+    public async Task ChangePasswordAsync(int userId, ChangePasswordRequest request)
+    {
+        // 1) Validate input shape -> 400 if bad (non-empty, length, new != current).
+        var validation = await _changePasswordValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+        {
+            var errors = validation.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            throw new ValidationException(errors);
+        }
+
+        // 2) Load the caller's own row.
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            throw new NotFoundException("User not found.");
+
+        // 3) Google-only accounts have no password to change. Reject clearly instead of
+        //    letting BCrypt.Verify throw on a null hash (which would surface as a 500).
+        if (user.PasswordHash is null)
+            throw new ConflictException(
+                "This account uses Google sign-in and has no password to change.");
+
+        // 4) Re-verify the CURRENT password against the stored hash -> 401 if wrong (3.8).
+        if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+            throw new UnauthorizedException("Current password is incorrect.");
+
+        // 5) Hash the NEW password (work factor 12, like RegisterAsync).
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12);
+
+        // 6) Revoke ALL of this user's still-active refresh tokens so every existing
+        //    session is logged out. A password change often means "I may be compromised";
+        //    an attacker holding an old refresh token must not be able to keep minting
+        //    access tokens after the password changes. EF is tracking each loaded token,
+        //    so these revocations and the password update are saved together by the single
+        //    SaveChanges below (one atomic transaction).
+        var activeTokens = await _db.RefreshTokens
+            .Where(rt => rt.UserId == userId && rt.RevokedAt == null)
+            .ToListAsync();
+
+        foreach (var token in activeTokens)
+            token.RevokedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+    }
+
+    // Map the entity to its safe public projection (no PasswordHash, no navigation graph).
+    private static UserProfileResponse MapToProfile(User user) => new()
+    {
+        Id = user.Id,
+        Email = user.Email,
+        FirstName = user.FirstName,
+        LastName = user.LastName,
+        PhoneNumber = user.PhoneNumber,
+        Role = user.Role.ToString(),
+        CreatedAt = user.CreatedAt
+    };
+
+    // Shared helper: mint access + refresh tokens, store the refresh token, build AuthResponse.
+    private async Task<AuthResponse> IssueTokensAsync(User user)
+    {
+        // TB-147: make sure the user's owned stores are loaded so the access token can carry
+        // the StoreIds claim. This is the single chokepoint for every flow (login, register,
+        // refresh-token, and the future register-seller), so loading here covers them all.
+        if (!_db.Entry(user).Collection(u => u.Stores).IsLoaded)
+            await _db.Entry(user).Collection(u => u.Stores).LoadAsync();
+
+        var accessToken = _tokens.GenerateAccessToken(user);
+        var refreshTokenValue = _tokens.GenerateRefreshToken();
+
+        var refreshToken = new RefreshToken
+        {
+            Token = refreshTokenValue,
+            UserId = user.Id,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)   // refresh token lives 7 days
+        };
+        _db.RefreshTokens.Add(refreshToken);
+        await _db.SaveChangesAsync();
+
+        return new AuthResponse
+        {
+            AccessToken = accessToken,
+            RefreshToken = refreshTokenValue,
+            ExpiresIn = _jwt.ExpiryMinutes * 60,     // minutes -> seconds (15 -> 900)
+            User = new UserDto
+            {
+                Id = user.Id,
+                Email = user.Email,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                PhoneNumber = user.PhoneNumber,
+                Role = user.Role.ToString()
+            }
+        };
+    }
+}
