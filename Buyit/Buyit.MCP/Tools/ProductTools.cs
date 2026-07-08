@@ -18,7 +18,7 @@ public class ProductTools
         _inventoryService = inventoryService;
     }
 
-    [McpServerTool, Description("Search for products by name, category, or price range. Returns a paginated list.")]
+    [McpServerTool, Description("Search for products by name, category, or price range. Matching is case-insensitive and word-order independent. Returns a paginated list; each item has a 'quantityInStock' field — a product is IN STOCK when quantityInStock is greater than 0.")]
     public async Task<string> search_products(
         [Description("Search term to filter by product name")] string? search = null,
         [Description("Category ID to filter by")] int? categoryId = null,

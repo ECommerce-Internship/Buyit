@@ -227,13 +227,15 @@ public class DashboardService : IDashboardService
         var cached = await _cache.GetAsync<List<PeriodPointResponse>>(key);
         if (cached is not null) return cached;
 
-        var dates = await _db.Users
-            .Where(u => u.Role == UserRole.Customer)
-            .Select(u => u.CreatedAt)
-            .ToListAsync();
+        var now = DateTime.UtcNow;
+        var (start, bucket, _) = ResolveRange(period, now);
+        var usersQuery = _db.Users.Where(u => u.Role == UserRole.Customer);
+        if (start is not null) usersQuery = usersQuery.Where(u => u.CreatedAt >= start);
+
+        var dates = await usersQuery.Select(u => u.CreatedAt).ToListAsync();
 
         var result = dates
-            .GroupBy(d => BucketLabel(d, period))
+            .GroupBy(d => BucketLabel(d, bucket))
             .Select(g => new PeriodPointResponse(g.Key, g.Count()))
             .OrderBy(p => p.Period)
             .ToList();
@@ -281,9 +283,9 @@ public class DashboardService : IDashboardService
             "1d" => (now.AddDays(-1), "hour", TimeSpan.FromHours(1)),
             "15d" => (now.AddDays(-15), "day", TimeSpan.FromDays(1)),
             "30d" => (now.AddDays(-30), "day", TimeSpan.FromDays(1)),
-            "3m" => (now.AddDays(-90), "week", TimeSpan.FromDays(1)),
-            "6m" => (now.AddDays(-180), "month", TimeSpan.FromDays(1)),
-            "1y" => (now.AddDays(-365), "month", TimeSpan.FromDays(1)),
+            "3m" => (now.AddMonths(-3), "week", TimeSpan.FromDays(1)),
+            "6m" => (now.AddMonths(-6), "month", TimeSpan.FromDays(1)),
+            "1y" => (now.AddYears(-1), "month", TimeSpan.FromDays(1)),
             _ => (null, token ?? "month", TimeSpan.FromDays(1)),   // legacy: no window
         };
 
@@ -293,6 +295,6 @@ public class DashboardService : IDashboardService
         "hour" => dt.ToString("yyyy-MM-dd HH:00"),
         "day" => dt.ToString("yyyy-MM-dd"),
         "week" => $"{System.Globalization.ISOWeek.GetYear(dt)}-W{System.Globalization.ISOWeek.GetWeekOfYear(dt):D2}",
-        _ => dt.ToString("yyyy-MM")   // "month" (default)
+        _ => dt.ToString("yyyy-MM")   // "month"
     };
 }
