@@ -1,11 +1,12 @@
-﻿using Asp.Versioning;
+﻿using System.IdentityModel.Tokens.Jwt;   // JwtRegisteredClaimNames.Sub
+using System.Security.Claims;             // User.FindFirstValue(...)
+using Asp.Versioning;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
-using Microsoft.AspNetCore.Mvc;
-using System.IdentityModel.Tokens.Jwt;   // JwtRegisteredClaimNames.Sub
-using System.Security.Claims;             // User.FindFirstValue(...)
-using Microsoft.AspNetCore.Authorization; // [Authorize]
 using Buyit.Domain.Exceptions;            // UnauthorizedException (for the GetUserId guard)
+using Microsoft.AspNetCore.Authorization; // [Authorize]
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Buyit.Api.Controllers;
 
@@ -15,10 +16,12 @@ namespace Buyit.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
+    private readonly IPasswordResetService _passwordReset;
 
-    public AuthController(IAuthService auth)
+    public AuthController(IAuthService auth, IPasswordResetService passwordReset)
     {
         _auth = auth;
+        _passwordReset = passwordReset;
     }
 
     /// <summary>Create a new account and receive tokens.</summary>
@@ -74,6 +77,33 @@ public class AuthController : ControllerBase
         SetRefreshTokenCookie(result.RefreshToken);
         result.RefreshToken = string.Empty;
         return Ok(result);
+    }
+
+    /// <summary>Request a password reset code by email. Always returns 200 — even for an
+    /// unknown email — so callers can never tell whether an account exists.</summary>
+    [AllowAnonymous]
+    [EnableRateLimiting("forgot-password")]
+    [HttpPost("forgot-password")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        await _passwordReset.RequestPasswordResetAsync(request);
+        return Ok();
+    }
+
+    /// <summary>Reset a password using the code emailed by /forgot-password. Revokes all of
+    /// the user's existing refresh tokens on success.</summary>
+    [AllowAnonymous]
+    [HttpPost("reset-password")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        await _passwordReset.ResetPasswordAsync(request);
+        return Ok();
     }
 
     /// <summary>Exchange a valid refresh token (read from the HttpOnly cookie) for a fresh access + refresh token pair (rotates the old one).</summary>

@@ -103,7 +103,7 @@ public class InventoryService : IInventoryService
 
         // Trigger low stock alert if quantity dropped to or below threshold
         if (newQuantity <= inventory.LowStockThreshold)
-            await _lowStockAlertService.TriggerAlertAsync(productId, inventory.Product.Name, newQuantity, inventory.LowStockThreshold);
+            await _lowStockAlertService.TriggerAlertAsync(productId, inventory.Product.Name, newQuantity, inventory.LowStockThreshold, inventory.Product.StoreId);
 
         return ToResponse(inventory);
     }

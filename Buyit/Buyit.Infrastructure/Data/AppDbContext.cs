@@ -13,6 +13,7 @@ namespace Buyit.Infrastructure.Data
         public DbSet<User> Users => Set<User>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
         public DbSet<UserExternalLogin> UserExternalLogins => Set<UserExternalLogin>();
+        public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
         public DbSet<Category> Categories => Set<Category>();
         public DbSet<Product> Products => Set<Product>();
         public DbSet<Inventory> Inventories => Set<Inventory>();
@@ -43,6 +44,13 @@ namespace Buyit.Infrastructure.Data
                 .HasOne(el => el.User)
                 .WithMany(u => u.ExternalLogins)
                 .HasForeignKey(el => el.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // User (1) -> PasswordResetTokens (N) : delete user -> delete their reset tokens
+            modelBuilder.Entity<PasswordResetToken>()
+                .HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             // User (1) -> Orders (N) : keep order history if user removed
@@ -214,6 +222,9 @@ namespace Buyit.Infrastructure.Data
             // A unique index turns that O(n) table scan into a B-tree seek and
             // guarantees no two sessions ever share a token value.
             modelBuilder.Entity<RefreshToken>().HasIndex(rt => rt.Token).IsUnique();
+            // Reset codes are looked up by UserId (then verified in memory via BCrypt), not by
+            // CodeHash directly — this index makes that per-user lookup fast.
+            modelBuilder.Entity<PasswordResetToken>().HasIndex(t => t.UserId);
             // A given external account (Provider + ProviderUserId) may be linked
             // to at most ONE of our users. Enforced at the database level so two
             // users can never claim the same Google account.

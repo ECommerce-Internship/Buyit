@@ -108,6 +108,8 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IValidator<UpdateProfileRequest>, UpdateProfileRequestValidator>();
 builder.Services.AddScoped<IValidator<ChangePasswordRequest>, ChangePasswordRequestValidator>();
+builder.Services.AddScoped<IValidator<ForgotPasswordRequest>, ForgotPasswordRequestValidator>();
+builder.Services.AddScoped<IValidator<ResetPasswordRequest>, ResetPasswordRequestValidator>();
 builder.Services.AddScoped<IValidator<PlaceOrderRequest>, PlaceOrderRequestValidator>();
 builder.Services.AddScoped<IValidator<UpdateOrderStatusRequest>, UpdateOrderStatusRequestValidator>();
 builder.Services.AddScoped<ICartService, CartService>();
@@ -175,6 +177,9 @@ builder.Services.AddScoped<IMcpConnector, McpConnector>();
 builder.Services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
 builder.Services.AddScoped<IChatService, ChatService>();
 
+//TB:158 forgot password reset email service
+builder.Services.AddScoped<IPasswordResetService, PasswordResetService>();
+
 // Each chat message opens an HTTP session to the MCP service (TB-103) and calls the paid Gemini
 // API, so throttle the "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the
 // caller's "sub" claim, no queue (excess -> 429). Uses AddPolicy so we can partition by user —
@@ -210,6 +215,22 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),       // ...per rolling minute...
                 SegmentsPerWindow = 6,                  // ...checked in 10-second slices (smooth)
                 QueueLimit = 0                          // no waiting room: excess -> immediate 429
+            });
+    });
+
+    options.AddPolicy("forgot-password", httpContext =>
+    {
+        // This endpoint is [AllowAnonymous] — there's no "sub" claim to key on, so partition by
+        // IP instead, so one abusive client can't email-bomb arbitrary addresses.
+        var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+            new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 3,                      // 3 requests...
+                Window = TimeSpan.FromMinutes(15),    // ...per rolling 15 minutes...
+                SegmentsPerWindow = 3,                // ...checked in 5-minute slices
+                QueueLimit = 0                         // no waiting room: excess -> immediate 429
             });
     });
 });
