@@ -179,6 +179,10 @@ builder.Services.AddScoped<IChatService, ChatService>();
 
 //TB:158 forgot password reset email service
 builder.Services.AddScoped<IPasswordResetService, PasswordResetService>();
+// TB-157: Coupon CRUD (Admin global, Seller store-scoped)
+builder.Services.AddScoped<ICouponService, CouponService>();
+builder.Services.AddScoped<IValidator<CreateCouponRequest>, CreateCouponRequestValidator>();
+builder.Services.AddScoped<IValidator<UpdateCouponRequest>, UpdateCouponRequestValidator>();
 
 // Each chat message opens an HTTP session to the MCP service (TB-103) and calls the paid Gemini
 // API, so throttle the "chat" endpoint PER USER (not per server): a sliding window of 10 requests/minute keyed on the

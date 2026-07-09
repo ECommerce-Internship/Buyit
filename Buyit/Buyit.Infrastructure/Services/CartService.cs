@@ -137,7 +137,7 @@ public class CartService : ICartService
         await _context.SaveChangesAsync();
     }
 
-    // APPLY COUPON: Validates coupon is active and not expired, then sets on cart
+    // APPLY COUPON: Validates coupon is active, not expired, and not exhausted, then sets on cart
     public async Task<CartResponse> ApplyCouponAsync(int userId, ApplyCouponRequest request)
     {
         var cart = await GetOrCreateCartAsync(userId);
@@ -161,6 +161,12 @@ public class CartService : ICartService
             throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
             {
                 ["code"] = [$"Coupon '{request.Code}' has expired."]
+            });
+
+        if (coupon.UsageLimit is not null && coupon.UsageCount >= coupon.UsageLimit)
+            throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+            {
+                ["code"] = [$"Coupon '{request.Code}' has reached its usage limit."]
             });
 
         cart.CouponId = coupon.Id;
@@ -239,8 +245,23 @@ public class CartService : ICartService
         )).ToList();
 
         var subtotal = items.Sum(i => i.LineTotal);
-        var discountPercentage = cart.Coupon?.DiscountPercentage ?? 0;
-        var discountAmount = Math.Round(subtotal * (discountPercentage / 100), 2);
+        decimal discountPercentage = 0;
+        decimal discountAmount = 0;
+
+        if (cart.Coupon is not null)
+        {
+            if (cart.Coupon.DiscountType == Buyit.Domain.Enums.CouponDiscountType.Percentage)
+            {
+                discountPercentage = cart.Coupon.DiscountValue;
+                discountAmount = Math.Round(subtotal * (discountPercentage / 100), 2);
+            }
+            else
+            {
+                // FixedAmount: a flat amount off, never discounting past zero.
+                discountAmount = Math.Min(cart.Coupon.DiscountValue, subtotal);
+            }
+        }
+
         var finalTotal = subtotal - discountAmount;
 
         return new CartResponse(

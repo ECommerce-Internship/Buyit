@@ -143,8 +143,20 @@ public class OrderService : IOrderService
             }
 
             // (6) Order-level discount + total.
-            var discountPct = coupon?.DiscountPercentage ?? 0m;
-            order.DiscountAmount = Math.Round(subtotalAll * (discountPct / 100m), 2);
+            decimal discountAmount = 0m;
+            if (coupon is not null)
+            {
+                if (coupon.DiscountType == Buyit.Domain.Enums.CouponDiscountType.Percentage)
+                {
+                    discountAmount = Math.Round(subtotalAll * (coupon.DiscountValue / 100m), 2);
+                }
+                else
+                {
+                    // FixedAmount: a flat amount off, never discounting past zero.
+                    discountAmount = Math.Min(coupon.DiscountValue, subtotalAll);
+                }
+            }
+            order.DiscountAmount = discountAmount;
             order.TotalAmount = subtotalAll - order.DiscountAmount;
 
             _context.Orders.Add(order);
