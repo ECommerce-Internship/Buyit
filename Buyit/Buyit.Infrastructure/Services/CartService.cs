@@ -143,6 +143,7 @@ public class CartService : ICartService
         var cart = await GetOrCreateCartAsync(userId);
 
         var coupon = await _context.Coupons
+            .Include(c => c.Store)
             .FirstOrDefaultAsync(c => c.Code.ToLower() == request.Code.ToLower());
 
         if (coupon == null)
@@ -167,6 +168,13 @@ public class CartService : ICartService
             throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
             {
                 ["code"] = [$"Coupon '{request.Code}' has reached its usage limit."]
+            });
+
+        // Store-scoped coupons only apply if the cart actually contains something from that store.
+        if (coupon.StoreId is not null && !cart.CartItems.Any(ci => ci.Product != null && ci.Product.StoreId == coupon.StoreId))
+            throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+            {
+                ["code"] = [$"Coupon '{request.Code}' only applies to products from {coupon.Store?.Name ?? "a specific store"}."]
             });
 
         cart.CouponId = coupon.Id;
@@ -250,20 +258,27 @@ public class CartService : ICartService
 
         if (cart.Coupon is not null)
         {
+            // Store-scoped coupons only discount THAT store's items, not the whole cart.
+            // A global coupon (StoreId == null) still discounts the whole subtotal.
+            var discountBase = cart.Coupon.StoreId is null
+                ? subtotal
+                : cart.CartItems
+                    .Where(ci => ci.Product != null && ci.Product.StoreId == cart.Coupon.StoreId)
+                    .Sum(ci => ci.Product.Price * ci.Quantity);
+
             if (cart.Coupon.DiscountType == Buyit.Domain.Enums.CouponDiscountType.Percentage)
             {
                 discountPercentage = cart.Coupon.DiscountValue;
-                discountAmount = Math.Round(subtotal * (discountPercentage / 100), 2);
+                discountAmount = Math.Round(discountBase * (discountPercentage / 100), 2);
             }
             else
             {
                 // FixedAmount: a flat amount off, never discounting past zero.
-                discountAmount = Math.Min(cart.Coupon.DiscountValue, subtotal);
+                discountAmount = Math.Min(cart.Coupon.DiscountValue, discountBase);
             }
         }
 
         var finalTotal = subtotal - discountAmount;
-
         return new CartResponse(
             cart.Id,
             items,
