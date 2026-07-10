@@ -43,4 +43,16 @@ public interface IProductService
     // ValidationException (400) if the specs are missing/too long.
     // IMPORTANT: this does NOT persist anything — it only returns a suggestion.
     Task<ProductContentResponse> GenerateContentAsync(int id, GenerateContentRequest request);
+
+    // TB-156: rank APPROVED products by semantic similarity to a free-text query.
+    // Embeds the query via Gemini (ExternalServiceException/502 on failure) and orders by
+    // cosine distance in Postgres. Throws ValidationException (400) if the query is empty.
+    Task<IReadOnlyList<SemanticSearchResult>> SearchSemanticAsync(
+        string query, int take, CancellationToken cancellationToken = default);
+
+    // TB-156: embed products that have no embedding yet, capped at batchSize per call so the
+    // request stays bounded. Re-runnable (idempotent): already-embedded products are skipped.
+    // Returns the counts embedded/failed and how many products are still pending (re-run until 0).
+    Task<BackfillEmbeddingsResponse> BackfillEmbeddingsAsync(
+        int batchSize = 100, CancellationToken cancellationToken = default);
 }

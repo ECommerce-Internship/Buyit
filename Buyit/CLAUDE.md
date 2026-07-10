@@ -72,6 +72,15 @@ Connection strings and settings come from `appsettings.json` /
 - `Jwt:Issuer` / `Jwt:Audience` / `Jwt:Secret` / `Jwt:ExpiryMinutes`
 - `Authentication:Google:*` — Google OAuth (`ClientId` / `ClientSecret` / `RedirectUri`)
 - `Gemini:ApiKey` / `Gemini:Model` — Google Gemini (AI product-content generation)
+- `Gemini:EmbeddingModel` — embedding model for **semantic product search** (TB-156; defaults to
+  `gemini-embedding-001`, whose 3072-dim output is pinned to 768 via `outputDimensionality` to match
+  the `vector(768)` column). Products are embedded on create/update; embed pre-existing rows in
+  bounded, re-runnable batches with `POST /api/v1/products/embeddings/backfill?batchSize=100` (Admin) —
+  re-run until the response's `remaining` is 0. Requires the `pgvector` Postgres extension — the local
+  `docker-compose.yml` uses the `pgvector/pgvector:pg16` image and the initial migration runs
+  `CREATE EXTENSION IF NOT EXISTS vector`. **Deploy note:** the DB role must be allowed to create that
+  extension (on Neon `vector` is in the allowlist; if `db.Database.Migrate()` can't create it, run
+  `CREATE EXTENSION IF NOT EXISTS vector;` once as an authorised role before deploying).
 - `Sftp:Host` / `Sftp:Port` / `Sftp:Username` / `Sftp:Password` — SFTP product import
 - **Email (provider auto-selected at startup, see §8):**
   - `SendGrid:ApiKey` / `SendGrid:FromEmail` / `SendGrid:FromName` — if set, SendGrid is used (prod)

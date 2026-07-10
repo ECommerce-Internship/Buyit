@@ -1,5 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Globalization;
+using Microsoft.EntityFrameworkCore;
 using Buyit.Domain.Entities;
+using Pgvector;
 
 namespace Buyit.Infrastructure.Data
 {
@@ -251,6 +253,34 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.UnitPrice).HasPrecision(18, 2);
             modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.Subtotal).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.DiscountAmount).HasPrecision(18, 2);
+
+            // ========== TB-156: SEMANTIC-SEARCH EMBEDDING ==========
+            // Declare the embedding column as a fixed 768-dimension pgvector. Fixing the
+            // dimension lets Postgres validate writes and (later) build an ANN index on it.
+            // The pgvector "vector" type only exists on the Npgsql provider.
+            if (Database.IsNpgsql())
+            {
+                modelBuilder.Entity<Product>()
+                    .Property(p => p.Embedding)
+                    .HasColumnType("vector(768)");
+            }
+            else
+            {
+                // Non-Npgsql providers (the in-memory test DB) can't map the pgvector "vector" type.
+                // Store the embedding through a simple string value converter so the property stays
+                // MAPPED and QUERYABLE (e.g. `Where(p => p.Embedding == null)` in the backfill). Uses
+                // an invariant, ';'-delimited form so it never clashes with a decimal separator.
+                // Production always takes the Npgsql branch above; this path is test-only.
+                modelBuilder.Entity<Product>()
+                    .Property(p => p.Embedding)
+                    .HasConversion(
+                        v => v == null
+                            ? null
+                            : string.Join(';', v.ToArray().Select(f => f.ToString(CultureInfo.InvariantCulture))),
+                        s => string.IsNullOrEmpty(s)
+                            ? null
+                            : new Vector(s.Split(';').Select(x => float.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
+            }
 
             // ========== CHECK CONSTRAINT ==========
             modelBuilder.Entity<Review>()

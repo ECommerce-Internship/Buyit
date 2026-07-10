@@ -84,7 +84,9 @@ builder.Services.AddCors(options =>
 
 // EF Core — register the database context
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        o => o.UseVector()));   // TB-156: Pgvector.EntityFrameworkCore — maps the SQL "vector" type
 // JWT Settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.Configure<GoogleAuthSettings>(
@@ -162,6 +164,8 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 
 builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
+// TB-156: semantic-search embedding client (reuses the "GeminiClient" HttpClient above).
+builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
@@ -219,6 +223,27 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),       // ...per rolling minute...
                 SegmentsPerWindow = 6,                  // ...checked in 10-second slices (smooth)
                 QueueLimit = 0                          // no waiting room: excess -> immediate 429
+            });
+    });
+
+    // TB-156: semantic product search also calls the paid Gemini (embedding) API, so it still
+    // needs a throttle — but a MUCH more generous one than "chat", because a shopper naturally
+    // fires many searches in a browsing session (refining terms, paging categories). 60/minute
+    // (~1 per second) keeps normal browsing unhindered while still capping scripted abuse. This
+    // endpoint is public, so the partition falls back to the client IP when there's no "sub".
+    options.AddPolicy("semantic-search", httpContext =>
+    {
+        var partitionKey = httpContext.User?.FindFirst("sub")?.Value
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous";
+
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+            new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,                       // 60 searches...
+                Window = TimeSpan.FromMinutes(1),       // ...per rolling minute (~1/sec)...
+                SegmentsPerWindow = 6,                  // ...smoothed over 10-second slices...
+                QueueLimit = 0                          // excess -> immediate 429 (with Retry-After)
             });
     });
 
