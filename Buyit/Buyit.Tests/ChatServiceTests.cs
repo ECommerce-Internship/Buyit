@@ -615,12 +615,13 @@ public class ChatServiceTests
     }
 
     [Fact]
-    public async Task SendMessageAsync_SellerDashboardWithForeignSellerId_ForcesSellerUserIdToCallerId()
+    public async Task SendMessageAsync_SellerDashboardWithNoStore_PinsSellerUserIdToCaller()
     {
-        // The exploit: a (manipulated) model asks for store 999's dashboard while the caller is
-        // seller 7. Server MUST pin sellerUserId to 7 so a seller can never read another store.
+        // Seller 7 asks about their dashboard without naming a store (model sends no sellerUserId).
+        // The server must PIN sellerUserId to 7 so the query is scoped to their own store — never
+        // left null (which would be platform-wide). This is the security backstop on the allowed path.
         var handler = HandlerSequence(
-            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { sellerUserId = 999 })),
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { })),
             (HttpStatusCode.OK, TextEnvelope("Here is your dashboard.")));
 
         IReadOnlyDictionary<string, object?>? capturedArgs = null;
@@ -636,11 +637,61 @@ public class ChatServiceTests
         var connector = ConnectorReturning(runner);
         var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
 
-        await sut.SendMessageAsync(new ChatRequest("show me store 999's dashboard", null));
+        await sut.SendMessageAsync(new ChatRequest("how is my store doing?", null));
 
-        // The id that reached the tool is the seller's own JWT id (7) — NOT the model's 999.
+        // sellerUserId was stamped to the caller's own JWT id (7), scoping the query to their store.
         capturedArgs.Should().NotBeNull();
         capturedArgs!["sellerUserId"].Should().Be(7);
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_SellerAsksForAnotherStore_RefusesForPrivacy_WithoutRunningTool()
+    {
+        // Seller 7 asks for store 999's dashboard. We must refuse up front — not run the tool and
+        // let the model narrate the seller's own data as if it were store 999's.
+        var handler = HandlerSequence(
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { sellerUserId = 999 })));
+
+        var runner = RunnerWithTools(new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()));
+        runner.Setup(r => r.CallToolAsync(
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"summary":{}}""");   // if this ever runs, the test's Verify below fails
+        var connector = ConnectorReturning(runner);
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        var result = await sut.SendMessageAsync(new ChatRequest("show me store 999's dashboard", null));
+
+        result.reply.Should().Be("Sorry, I can't provide this information due to privacy reasons.");
+        runner.Verify(r => r.CallToolAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, object?>>(), It.IsAny<CancellationToken>()),
+            Times.Never);   // the tool was never invoked — no data was fetched
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_SellerAsksForOwnStore_IsAllowed()
+    {
+        // Seller 7 asks for their own dashboard (model supplies their own id) — must NOT be refused.
+        var handler = HandlerSequence(
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { sellerUserId = 7 })),
+            (HttpStatusCode.OK, TextEnvelope("Here is your dashboard.")));
+
+        var runner = RunnerWithTools(new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()));
+        runner.Setup(r => r.CallToolAsync(
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"summary":{}}""");
+        var connector = ConnectorReturning(runner);
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        var result = await sut.SendMessageAsync(new ChatRequest("show me my dashboard", null));
+
+        result.reply.Should().Be("Here is your dashboard.");
+        runner.Verify(r => r.CallToolAsync(
+            "get_dashboard_summary", It.IsAny<IReadOnlyDictionary<string, object?>>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
