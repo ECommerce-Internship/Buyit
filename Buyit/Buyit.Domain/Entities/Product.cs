@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Pgvector;
 
 namespace Buyit.Domain.Entities;
 
@@ -39,6 +40,11 @@ public class Product
 
     [MaxLength(4000)]
     public string? FeaturesJson { get; set; }
+
+    // TB-156: semantic-search embedding of (name + description + category), 768 dims from
+    // Gemini text-embedding-004. Nullable: freshly-created and legacy products have none until
+    // generated/backfilled. Stored as a Postgres pgvector column and compared with cosine distance.
+    public Vector? Embedding { get; set; }
 
     // Each product belongs to exactly one category (1:N — FK on this "many" side).
     public int CategoryId { get; set; }

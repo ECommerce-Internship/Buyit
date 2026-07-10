@@ -23,12 +23,20 @@ public class EmailService : IEmailService
         return Task.CompletedTask;
     }
 
-    public Task SendLowStockAlertAsync(LowStockMessage message)
+    public Task SendLowStockAlertAsync(LowStockMessage message, string recipientEmail)
     {
         _logger.LogWarning(
-            "Low stock alert email (not sent — SendGrid not configured): Product '{ProductName}' (ID: {ProductId}), Quantity: {Quantity}",
-            message.ProductName, message.ProductId, message.Quantity);
+            "Low stock alert email (not sent — SendGrid not configured): Product '{ProductName}' (ID: {ProductId}), Quantity: {Quantity}, would go to {Email}",
+            message.ProductName, message.ProductId, message.Quantity, recipientEmail);
 
+        return Task.CompletedTask;
+    }
+
+    public Task SendPasswordResetCodeAsync(string recipientEmail, string code)
+    {
+        _logger.LogWarning(
+            "Password reset code email (not sent — SendGrid not configured): would go to {Email}",
+            recipientEmail);
         return Task.CompletedTask;
     }
 }

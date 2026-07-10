@@ -31,7 +31,8 @@ public class ProductServiceTests
         out AppDbContext db,
         out Mock<IValidator<CreateProductRequest>> createValidatorMock,
         out Mock<IValidator<UpdateProductRequest>> updateValidatorMock,
-        out Mock<IGeminiService> geminiMock)
+        out Mock<IGeminiService> geminiMock,
+        out Mock<IEmbeddingService> embeddingMock)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -86,6 +87,13 @@ public class ProductServiceTests
         currentUserMock.Setup(c => c.IsAdmin).Returns(true);
         currentUserMock.Setup(c => c.UserId).Returns(1);
 
+        // TB-156: embedder mocked. Defaults to a valid 768-length vector so create/update (which
+        // embed best-effort) succeed silently; tests that care override this via the out param.
+        embeddingMock = new Mock<IEmbeddingService>();
+        embeddingMock
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new float[768]);
+
         return new ProductService(
             db,
             createValidatorMock.Object,
@@ -95,6 +103,7 @@ public class ProductServiceTests
             currentUserMock.Object,
             geminiMock.Object,
             generateContentValidatorMock.Object,
+            embeddingMock.Object,
             loggerMock.Object);
     }
 
@@ -134,7 +143,7 @@ public class ProductServiceTests
     [Fact]
     public async Task CreateProduct_ValidRequest_ReturnsProductResponse()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -163,7 +172,7 @@ public class ProductServiceTests
     [Fact]
     public async Task CreateProduct_DuplicateSKU_ThrowsConflictException()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         db.Products.Add(new Product
         {
@@ -197,7 +206,7 @@ public class ProductServiceTests
     [Fact]
     public async Task GetProductById_ExistingId_ReturnsProductResponse()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 7, Name = "Audio" });
         db.Products.Add(new Product
         {
@@ -231,7 +240,7 @@ public class ProductServiceTests
     [Fact]
     public async Task GetProductById_NotFound_ThrowsNotFoundException()
     {
-        var sut = BuildSut(out _, out _, out _, out _);
+        var sut = BuildSut(out _, out _, out _, out _, out _);
 
         Func<Task> act = async () => await sut.GetByIdAsync(999);
 
@@ -242,7 +251,7 @@ public class ProductServiceTests
     [Fact]
     public async Task DeleteProduct_ExistingProduct_SetsIsDeletedTrue()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         db.Products.Add(new Product
         {
@@ -265,7 +274,7 @@ public class ProductServiceTests
     [Fact]
     public async Task ImportExcel_ValidRows_ReturnsCorrectAddedCount()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -287,7 +296,7 @@ public class ProductServiceTests
     [Fact]
     public async Task ImportExcel_InvalidPrice_IncludesRowInFailedList()
     {
-        var sut = BuildSut(out var db, out _, out _, out _);
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
         db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
         await db.SaveChangesAsync();
 
@@ -310,7 +319,7 @@ public class ProductServiceTests
     public async Task GenerateContentAsync_ProductExists_ReturnsSuggestionAndDoesNotSave()
     {
         // Arrange — a product in the in-memory DB, plus a fake AI reply from the mock.
-        var sut = BuildSut(out var db, out _, out _, out var geminiMock);
+        var sut = BuildSut(out var db, out _, out _, out var geminiMock, out _);
         var category = new Category { Name = "Phones" };
         var product = new Product
         {
@@ -355,7 +364,7 @@ public class ProductServiceTests
     public async Task GenerateContentAsync_ProductMissing_ThrowsNotFoundException()
     {
         // Arrange — empty DB, so id 999 cannot exist.
-        var sut = BuildSut(out _, out _, out _, out _);
+        var sut = BuildSut(out _, out _, out _, out _, out _);
         var request = new GenerateContentRequest("anything");
 
         // Act
@@ -363,5 +372,126 @@ public class ProductServiceTests
 
         // Assert
         await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    // ===================== TB-156: SEMANTIC SEARCH =====================
+    // The real ranking runs in Postgres via the pgvector "<=>" operator, which the in-memory EF
+    // provider cannot execute. So we (a) unit-test the pure cosine helper on canned vectors, and
+    // (b) test the service's input-validation and Gemini-failure mapping against the mocked client.
+
+    [Fact]
+    public void CosineSimilarity_IdenticalVectors_ReturnsOne()
+    {
+        var v = new float[] { 0.2f, 0.5f, 0.9f, 0.1f };
+        ProductService.CosineSimilarity(v, v).Should().BeApproximately(1.0, 1e-9);
+    }
+
+    [Fact]
+    public void CosineSimilarity_OrthogonalVectors_ReturnsZero()
+    {
+        var a = new float[] { 1f, 0f };
+        var b = new float[] { 0f, 1f };
+        ProductService.CosineSimilarity(a, b).Should().BeApproximately(0.0, 1e-9);
+    }
+
+    // "assert ranking order on canned vectors": a vector close in direction to the query must
+    // score higher (more similar) than one pointing away from it.
+    [Fact]
+    public void CosineSimilarity_RanksCloserVectorAboveFartherVector()
+    {
+        var query = new float[] { 1f, 0f };
+        var close = new float[] { 0.9f, 0.1f };   // small angle to the query
+        var far   = new float[] { 0.1f, 0.9f };   // large angle to the query
+
+        var simClose = ProductService.CosineSimilarity(query, close);
+        var simFar   = ProductService.CosineSimilarity(query, far);
+
+        simClose.Should().BeGreaterThan(simFar);
+
+        // And a full ranking of [far, close] by similarity puts 'close' first.
+        var ranked = new[] { far, close }
+            .OrderByDescending(v => ProductService.CosineSimilarity(query, v))
+            .ToList();
+        ranked[0].Should().BeSameAs(close);
+        ranked[1].Should().BeSameAs(far);
+    }
+
+    [Fact]
+    public async Task SearchSemantic_EmptyQuery_ThrowsValidationException()
+    {
+        var sut = BuildSut(out _, out _, out _, out _, out _);
+
+        Func<Task> act = async () => await sut.SearchSemanticAsync("   ", 10);
+
+        await act.Should().ThrowAsync<Buyit.Domain.Exceptions.ValidationException>();
+    }
+
+    [Fact]
+    public async Task SearchSemantic_EmbeddingServiceFails_PropagatesExternalServiceException()
+    {
+        var sut = BuildSut(out _, out _, out _, out _, out var embeddingMock);
+        // Override the default: the embedding client is down -> 502-style failure.
+        embeddingMock
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ExternalServiceException("The AI embedding service is unavailable."));
+
+        Func<Task> act = async () => await sut.SearchSemanticAsync("coffee mug", 10);
+
+        await act.Should().ThrowAsync<ExternalServiceException>();
+    }
+
+    // Best-effort embedding: a Gemini outage during create must be SWALLOWED so the product is
+    // still created (the backfill/lazy path fills the embedding in later).
+    [Fact]
+    public async Task CreateProduct_EmbeddingServiceFails_StillCreatesProduct()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        await db.SaveChangesAsync();
+        // Override the default: embedding is down.
+        embeddingMock
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ExternalServiceException("The AI embedding service is unavailable."));
+
+        var request = new CreateProductRequest
+        {
+            Name = "Wireless Mouse",
+            Description = "Ergonomic 2.4GHz mouse",
+            Sku = "MOUSE-BEE",
+            Price = 24.99m,
+            CategoryId = 1,
+            StoreId = 1,
+            InitialStock = 5
+        };
+
+        // Act — must NOT throw even though embedding failed.
+        var result = await sut.CreateAsync(request);
+
+        // Assert — the product exists and the request succeeded.
+        result.Should().NotBeNull();
+        var saved = await db.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Sku == "MOUSE-BEE");
+        saved.Should().NotBeNull();
+    }
+
+    // Backfill embeds every product that has no embedding yet and reports the counts.
+    [Fact]
+    public async Task BackfillEmbeddings_EmbedsPendingProducts_ReturnsCounts()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "A", Description = "a", Sku = "A-1", Price = 1m, CategoryId = 1, StoreId = 1 },
+            new Product { Id = 2, Name = "B", Description = "b", Sku = "B-1", Price = 2m, CategoryId = 1, StoreId = 1 },
+            new Product { Id = 3, Name = "C", Description = "c", Sku = "C-1", Price = 3m, CategoryId = 1, StoreId = 1 });
+        await db.SaveChangesAsync();
+        // Default embeddingMock already returns a valid 768-vector for every call.
+
+        var result = await sut.BackfillEmbeddingsAsync(batchSize: 100);
+
+        result.Embedded.Should().Be(3);
+        result.Failed.Should().Be(0);
+        result.Remaining.Should().Be(0);
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
     }
 }

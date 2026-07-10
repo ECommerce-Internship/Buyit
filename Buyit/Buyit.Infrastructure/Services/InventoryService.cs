@@ -103,17 +103,23 @@ public class InventoryService : IInventoryService
 
         // Trigger low stock alert if quantity dropped to or below threshold
         if (newQuantity <= inventory.LowStockThreshold)
-            await _lowStockAlertService.TriggerAlertAsync(productId, inventory.Product.Name, newQuantity, inventory.LowStockThreshold);
+            await _lowStockAlertService.TriggerAlertAsync(productId, inventory.Product.Name, newQuantity, inventory.LowStockThreshold, inventory.Product.StoreId);
 
         return ToResponse(inventory);
     }
 
     // GET LOW STOCK: Returns all inventory where quantity <= threshold, ordered by quantity ascending
-    public async Task<IEnumerable<InventoryResponse>> GetLowStockAsync()
+    public async Task<IEnumerable<InventoryResponse>> GetLowStockAsync(int? sellerUserId = null)
     {
-        return await _context.Inventories
+        var query = _context.Inventories
             .Include(i => i.Product)
-            .Where(i => !i.Product.IsDeleted && i.QuantityInStock <= i.LowStockThreshold)
+            .Where(i => !i.Product.IsDeleted && i.QuantityInStock <= i.LowStockThreshold);
+
+        // Scope to a single seller's own stores when requested (same rule the dashboard uses).
+        if (sellerUserId is not null)
+            query = query.Where(i => i.Product.Store.OwnerUserId == sellerUserId);
+
+        return await query
             .OrderBy(i => i.QuantityInStock)
             .Select(i => ToResponse(i))
             .ToListAsync();

@@ -1,5 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Globalization;
+using Microsoft.EntityFrameworkCore;
 using Buyit.Domain.Entities;
+using Pgvector;
 
 namespace Buyit.Infrastructure.Data
 {
@@ -13,6 +15,7 @@ namespace Buyit.Infrastructure.Data
         public DbSet<User> Users => Set<User>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
         public DbSet<UserExternalLogin> UserExternalLogins => Set<UserExternalLogin>();
+        public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
         public DbSet<Category> Categories => Set<Category>();
         public DbSet<Product> Products => Set<Product>();
         public DbSet<Inventory> Inventories => Set<Inventory>();
@@ -43,6 +46,13 @@ namespace Buyit.Infrastructure.Data
                 .HasOne(el => el.User)
                 .WithMany(u => u.ExternalLogins)
                 .HasForeignKey(el => el.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // User (1) -> PasswordResetTokens (N) : delete user -> delete their reset tokens
+            modelBuilder.Entity<PasswordResetToken>()
+                .HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             // User (1) -> Orders (N) : keep order history if user removed
@@ -214,6 +224,9 @@ namespace Buyit.Infrastructure.Data
             // A unique index turns that O(n) table scan into a B-tree seek and
             // guarantees no two sessions ever share a token value.
             modelBuilder.Entity<RefreshToken>().HasIndex(rt => rt.Token).IsUnique();
+            // Reset codes are looked up by UserId (then verified in memory via BCrypt), not by
+            // CodeHash directly — this index makes that per-user lookup fast.
+            modelBuilder.Entity<PasswordResetToken>().HasIndex(t => t.UserId);
             // A given external account (Provider + ProviderUserId) may be linked
             // to at most ONE of our users. Enforced at the database level so two
             // users can never claim the same Google account.
@@ -232,7 +245,7 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.TotalAmount).HasPrecision(18, 2);
             modelBuilder.Entity<Payment>().Property(p => p.Amount).HasPrecision(18, 2);
-            modelBuilder.Entity<Coupon>().Property(c => c.DiscountPercentage).HasPrecision(5, 2);
+            modelBuilder.Entity<Coupon>().Property(c => c.DiscountValue).HasPrecision(18, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.SubTotal).HasPrecision(10, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.CommissionAmount).HasPrecision(10, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.SellerNetAmount).HasPrecision(10, 2);
@@ -240,6 +253,34 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.UnitPrice).HasPrecision(18, 2);
             modelBuilder.Entity<StoreOrderItem>().Property(soi => soi.Subtotal).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.DiscountAmount).HasPrecision(18, 2);
+
+            // ========== TB-156: SEMANTIC-SEARCH EMBEDDING ==========
+            // Declare the embedding column as a fixed 768-dimension pgvector. Fixing the
+            // dimension lets Postgres validate writes and (later) build an ANN index on it.
+            // The pgvector "vector" type only exists on the Npgsql provider.
+            if (Database.IsNpgsql())
+            {
+                modelBuilder.Entity<Product>()
+                    .Property(p => p.Embedding)
+                    .HasColumnType("vector(768)");
+            }
+            else
+            {
+                // Non-Npgsql providers (the in-memory test DB) can't map the pgvector "vector" type.
+                // Store the embedding through a simple string value converter so the property stays
+                // MAPPED and QUERYABLE (e.g. `Where(p => p.Embedding == null)` in the backfill). Uses
+                // an invariant, ';'-delimited form so it never clashes with a decimal separator.
+                // Production always takes the Npgsql branch above; this path is test-only.
+                modelBuilder.Entity<Product>()
+                    .Property(p => p.Embedding)
+                    .HasConversion(
+                        v => v == null
+                            ? null
+                            : string.Join(';', v.ToArray().Select(f => f.ToString(CultureInfo.InvariantCulture))),
+                        s => string.IsNullOrEmpty(s)
+                            ? null
+                            : new Vector(s.Split(';').Select(x => float.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
+            }
 
             // ========== CHECK CONSTRAINT ==========
             modelBuilder.Entity<Review>()

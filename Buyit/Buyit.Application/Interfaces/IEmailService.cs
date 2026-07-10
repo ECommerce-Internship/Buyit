@@ -6,5 +6,6 @@ namespace Buyit.Application.Interfaces;
 public interface IEmailService
 {
     Task SendOrderConfirmationAsync(int orderId, string userEmail, decimal totalAmount);
-    Task SendLowStockAlertAsync(LowStockMessage message);
+    Task SendLowStockAlertAsync(LowStockMessage message, string recipientEmail);
+    Task SendPasswordResetCodeAsync(string recipientEmail, string code);
 }

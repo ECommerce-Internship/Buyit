@@ -41,10 +41,17 @@ public class ProductOwnershipTests
         var generateContentV = new Mock<IValidator<GenerateContentRequest>>();
         generateContentV.Setup(v => v.ValidateAsync(It.IsAny<GenerateContentRequest>(), default)).ReturnsAsync(new ValidationResult());
 
+        // TB-156: embedder mocked with a valid 768-vector so best-effort embedding on create/update
+        // succeeds silently; ownership tests don't assert on embeddings.
+        var embeddings = new Mock<IEmbeddingService>();
+        embeddings.Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new float[768]);
+
         return new ProductService(
             db, createV.Object, updateV.Object,
             new Mock<ICacheService>().Object, new Mock<IBlobStorageService>().Object,
             current.Object, gemini.Object, generateContentV.Object,
+            embeddings.Object,
             new Mock<ILogger<ProductService>>().Object);
     }
 

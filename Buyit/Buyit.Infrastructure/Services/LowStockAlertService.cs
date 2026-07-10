@@ -22,9 +22,9 @@ public class LowStockAlertService : ILowStockAlertService
         _logger = logger;
     }
 
-    public async Task TriggerAlertAsync(int productId, string productName, int quantity, int threshold)
+    public async Task TriggerAlertAsync(int productId, string productName, int quantity, int threshold, int storeId)
     {
-        var message = new LowStockMessage(productId, productName, quantity, threshold, DateTime.UtcNow);
+        var message = new LowStockMessage(productId, productName, quantity, threshold, DateTime.UtcNow, storeId);
 
         // If no Azure connection string configured, just log and return (local dev fallback)
         if (string.IsNullOrWhiteSpace(_settings.ConnectionString))
