@@ -70,7 +70,7 @@ var prodCorsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Ge
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(DevCors, policy =>
-        policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
+        policy.WithOrigins(["http://localhost:5173", "https://localhost:5173", .. prodCorsOrigins])
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials());
