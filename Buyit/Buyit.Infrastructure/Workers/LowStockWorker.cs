@@ -3,6 +3,8 @@ using Azure.Storage.Queues;
 using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
+using Buyit.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -66,10 +68,35 @@ public class LowStockWorker : BackgroundService
                             message.ProductName, message.ProductId);
 
                         // BackgroundService is a singleton — it outlives request scopes.
-                        // We must create a fresh scope per message to safely resolve scoped services (IEmailService).
+                        // We must create a fresh scope per message to safely resolve scoped services
+                        // (IEmailService, AppDbContext).
                         using var scope = _scopeFactory.CreateScope();
                         var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
-                        await emailService.SendLowStockAlertAsync(message);
+                        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                        // Route the alert to the store's actual owner instead of one shared inbox.
+                        var ownerUserId = await db.Stores
+                            .Where(s => s.Id == message.StoreId)
+                            .Select(s => (int?)s.OwnerUserId)
+                            .FirstOrDefaultAsync(stoppingToken);
+
+                        var ownerEmail = ownerUserId is null
+                            ? null
+                            : await db.Users
+                                .Where(u => u.Id == ownerUserId)
+                                .Select(u => u.Email)
+                                .FirstOrDefaultAsync(stoppingToken);
+
+                        if (string.IsNullOrWhiteSpace(ownerEmail))
+                        {
+                            _logger.LogWarning(
+                                "LowStockWorker: Could not resolve an owner email for StoreId {StoreId} (Product '{ProductName}') — alert not sent.",
+                                message.StoreId, message.ProductName);
+                        }
+                        else
+                        {
+                            await emailService.SendLowStockAlertAsync(message, ownerEmail);
+                        }
 
                         // Delete the message after successful processing
                         await client.DeleteMessageAsync(queueMessage.MessageId, queueMessage.PopReceipt, stoppingToken);

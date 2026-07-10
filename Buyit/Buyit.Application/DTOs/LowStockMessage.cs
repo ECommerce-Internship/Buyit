@@ -6,5 +6,6 @@ public record LowStockMessage(
     string ProductName,
     int Quantity,
     int Threshold,
-    DateTime TriggeredAt
+    DateTime TriggeredAt,
+    int StoreId
 );
