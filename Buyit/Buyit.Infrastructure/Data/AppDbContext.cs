@@ -243,7 +243,7 @@ namespace Buyit.Infrastructure.Data
             modelBuilder.Entity<Product>().Property(p => p.Price).HasPrecision(18, 2);
             modelBuilder.Entity<Order>().Property(o => o.TotalAmount).HasPrecision(18, 2);
             modelBuilder.Entity<Payment>().Property(p => p.Amount).HasPrecision(18, 2);
-            modelBuilder.Entity<Coupon>().Property(c => c.DiscountPercentage).HasPrecision(5, 2);
+            modelBuilder.Entity<Coupon>().Property(c => c.DiscountValue).HasPrecision(18, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.SubTotal).HasPrecision(10, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.CommissionAmount).HasPrecision(10, 2);
             modelBuilder.Entity<StoreOrder>().Property(so => so.SellerNetAmount).HasPrecision(10, 2);
