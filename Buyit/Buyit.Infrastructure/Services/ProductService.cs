@@ -7,7 +7,8 @@ using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;   
+using Microsoft.Extensions.Logging;
+using Pgvector.EntityFrameworkCore;   // TB-156: CosineDistance() -> Postgres "<=>" translation
 using OfficeOpenXml;
 using System.Globalization;
 using System.Security.Cryptography;   
@@ -29,6 +30,7 @@ public class ProductService : IProductService
     private readonly ILogger<ProductService> _logger;
     private readonly IGeminiService _gemini;                              // TB-47: AI content generator
     private readonly IValidator<GenerateContentRequest> _generateContentValidator;  // TB-47
+    private readonly IEmbeddingService _embeddings;                       // TB-156: semantic-search embeddings
 
     public ProductService(
      AppDbContext db,
@@ -39,6 +41,7 @@ public class ProductService : IProductService
      ICurrentUserService currentUser,     // <-- new (TB-125)
      IGeminiService gemini,                                          // <-- new (TB-47)
      IValidator<GenerateContentRequest> generateContentValidator,    // <-- new (TB-47)
+     IEmbeddingService embeddings,                                   // <-- new (TB-156)
      ILogger<ProductService> logger)
     {
         _db = db;
@@ -50,6 +53,7 @@ public class ProductService : IProductService
         _logger = logger;
         _gemini = gemini;                                           // <-- new (TB-47)
         _generateContentValidator = generateContentValidator;      // <-- new (TB-47)
+        _embeddings = embeddings;                                   // <-- new (TB-156)
     }
 
     // TB-125: throws 403 unless the caller is an admin or owns the given store.
@@ -411,6 +415,14 @@ public class ProductService : IProductService
         _db.Products.Add(product);
         await _db.SaveChangesAsync();   // inserts Product + Inventory atomically; sets product.Id.
 
+        // TB-156: generate the semantic-search embedding now that the row exists. Best-effort —
+        // a Gemini outage must NOT fail the create; the backfill/lazy path fills the gap later.
+        var categoryName = await _db.Categories
+            .Where(c => c.Id == request.CategoryId)
+            .Select(c => c.Name)
+            .FirstAsync();
+        await TryUpdateEmbeddingAsync(product, categoryName);
+
         // --- INVALIDATE: a new product can appear in list results, so drop its caches.
         await _cache.InvalidateProductAsync(product.Id);
 
@@ -442,6 +454,12 @@ public class ProductService : IProductService
         if (!categoryExists)
             throw new NotFoundException($"Category with id {request.CategoryId} was not found.");
 
+        // TB-156: capture the embedding-relevant fields BEFORE we overwrite them, so we only
+        // re-embed (a paid Gemini call) when the name, description, or category actually changed.
+        bool textChanged = product.Name != request.Name
+                        || product.Description != request.Description
+                        || product.CategoryId != request.CategoryId;
+
         // 4) COPY the editable fields. EF marks each changed column 'dirty'.
         product.Name = request.Name;
         product.Description = request.Description;
@@ -455,6 +473,16 @@ public class ProductService : IProductService
 
         // 5) One UPDATE statement is sent here.
         await _db.SaveChangesAsync();
+
+        // TB-156: re-embed only when the searchable text changed (best-effort, same as create).
+        if (textChanged)
+        {
+            var categoryName = await _db.Categories
+                .Where(c => c.Id == product.CategoryId)
+                .Select(c => c.Name)
+                .FirstAsync();
+            await TryUpdateEmbeddingAsync(product, categoryName);
+        }
 
         // --- INVALIDATE: the product changed, so drop its single cache AND all list caches.
         await _cache.InvalidateProductAsync(id);
@@ -494,6 +522,149 @@ public class ProductService : IProductService
         // 4) Return the suggestion. We DELIBERATELY do not save it — the admin must
         //    call PUT /products/{id} to keep anything (TB-47 requirement).
         return content;
+    }
+
+    // ===================== TB-156: SEMANTIC SEARCH =====================
+
+    // (Re)generate a product's semantic embedding from name + description + category.
+    // Best-effort: if the AI call fails we log and leave the vector unchanged/null so the WRITE
+    // still succeeds. Backfill and the query-time path cover the gap later.
+    private async Task TryUpdateEmbeddingAsync(Product product, string categoryName)
+    {
+        var text = $"{product.Name}\n{product.Description}\n{categoryName}";
+        try
+        {
+            var vector = await _embeddings.EmbedAsync(text);
+            product.Embedding = new Pgvector.Vector(vector);
+            await _db.SaveChangesAsync();
+        }
+        catch (ExternalServiceException ex)
+        {
+            _logger.LogWarning(ex, "Could not embed product {ProductId}; leaving embedding empty.", product.Id);
+        }
+    }
+
+    public async Task<IReadOnlyList<SemanticSearchResult>> SearchSemanticAsync(
+        string query, int take, CancellationToken cancellationToken = default)
+    {
+        // 1) Sanitize inputs. Empty query -> 400. Clamp 'take' to a sane 1..50.
+        if (string.IsNullOrWhiteSpace(query))
+            throw new ValidationException(new Dictionary<string, string[]>
+            {
+                ["q"] = new[] { "A search query is required." }
+            });
+        take = Math.Clamp(take, 1, 50);
+
+        // 2) Embed the QUERY. A failure here is fatal for search (no fallback) -> propagates as 502.
+        var queryVector = new Pgvector.Vector(await _embeddings.EmbedAsync(query, cancellationToken));
+
+        // 3) Rank in the DATABASE using cosine distance (<=>). Only APPROVED stores are public,
+        //    and only products that actually have an embedding can be ranked. Smaller = closer.
+        //    The distance is projected ONCE (into 'Distance') and the ordering reuses that
+        //    projection, so Postgres computes 'embedding <=> query' a single time per row.
+        var hits = await _db.Products
+            .Where(p => p.Store.Status == StoreStatus.Approved && p.Embedding != null)
+            .Select(p => new
+            {
+                Response = new ProductResponse
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    Description = p.Description,
+                    Sku = p.Sku,
+                    Price = p.Price,
+                    ImageUrl = p.ImageUrl,
+                    CreatedAt = p.CreatedAt,
+                    CategoryId = p.CategoryId,
+                    CategoryName = p.Category.Name,
+                    StoreId = p.StoreId,
+                    StoreName = p.Store.Name,
+                    StoreSlug = p.Store.Slug,
+                    QuantityInStock = p.Inventory != null ? p.Inventory.QuantityInStock : 0,
+                    AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                    ReviewCount = p.Reviews.Count,
+                    SeoTitle = p.SeoTitle,
+                    MetaDescription = p.MetaDescription,
+                    FeaturesJson = p.FeaturesJson
+                },
+                Distance = p.Embedding!.CosineDistance(queryVector)
+            })
+            .OrderBy(x => x.Distance)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        var results = hits.Select(h => new SemanticSearchResult(h.Response, h.Distance)).ToList();
+        PopulateFeatures(results.Select(r => r.Product));   // reuse the existing FeaturesJson decoder
+        return results;
+    }
+
+    // Max products embedded in a single backfill call, so one HTTP request can't run unboundedly
+    // over a huge catalogue (a sequence of paid, throttled AI calls). The endpoint is idempotent —
+    // callers re-run it until Response.Remaining == 0.
+    private const int MaxBackfillBatch = 500;
+
+    public async Task<BackfillEmbeddingsResponse> BackfillEmbeddingsAsync(
+        int batchSize = 100, CancellationToken cancellationToken = default)
+    {
+        batchSize = Math.Clamp(batchSize, 1, MaxBackfillBatch);
+
+        // Only products missing an embedding, capped at batchSize so the request is bounded.
+        // The soft-delete global filter already excludes deleted products (not searchable anyway).
+        // Deterministic order (by Id) so repeated runs make steady forward progress.
+        var pending = await _db.Products
+            .Include(p => p.Category)
+            .Where(p => p.Embedding == null)
+            .OrderBy(p => p.Id)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+
+        int embedded = 0, failed = 0;
+        foreach (var product in pending)
+        {
+            try
+            {
+                var text = $"{product.Name}\n{product.Description}\n{product.Category.Name}";
+                product.Embedding = new Pgvector.Vector(await _embeddings.EmbedAsync(text, cancellationToken));
+                await _db.SaveChangesAsync(cancellationToken);
+                embedded++;
+                await Task.Delay(200, cancellationToken);   // gentle throttle to stay under the rate limit
+            }
+            catch (ExternalServiceException ex)
+            {
+                failed++;
+                _logger.LogWarning(ex, "Backfill: failed to embed product {ProductId}; will retry on next run.", product.Id);
+            }
+        }
+
+        // How many products STILL have no embedding after this batch (includes this batch's
+        // failures). When this reaches 0, the backfill is complete.
+        var remaining = await _db.Products.CountAsync(p => p.Embedding == null, cancellationToken);
+        _logger.LogInformation(
+            "Backfill embedded {Embedded}, failed {Failed}, {Remaining} product(s) still pending.",
+            embedded, failed, remaining);
+        return new BackfillEmbeddingsResponse(embedded, failed, remaining);
+    }
+
+    // Pure cosine similarity of two equal-length vectors: 1 = identical direction, 0 = orthogonal.
+    // NOTE: this helper is NOT used by the production ranking path — SearchSemanticAsync ranks in
+    // Postgres via the pgvector <=> operator (cosine DISTANCE = 1 - similarity), which the in-memory
+    // EF provider cannot execute. It exists ONLY so unit tests can assert ranking order on canned
+    // vectors; the real SQL ordering is covered by manual verification. Keep the two in sync: a
+    // smaller <=> distance corresponds to a larger similarity here. Returns 0 for a zero vector.
+    internal static double CosineSimilarity(float[] a, float[] b)
+    {
+        if (a.Length != b.Length)
+            throw new ArgumentException("Vectors must have the same length.");
+
+        double dot = 0, magA = 0, magB = 0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += (double)a[i] * b[i];
+            magA += (double)a[i] * a[i];
+            magB += (double)b[i] * b[i];
+        }
+        if (magA == 0 || magB == 0) return 0;
+        return dot / (Math.Sqrt(magA) * Math.Sqrt(magB));
     }
 
     public async Task DeleteAsync(int id)

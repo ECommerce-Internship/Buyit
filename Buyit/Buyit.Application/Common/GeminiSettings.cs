@@ -10,4 +10,10 @@ public class GeminiSettings
 
     // Which Gemini model to call, e.g. "gemini-2.5-flash".
     public string Model { get; set; } = "gemini-2.5-flash";
+
+    // TB-156: which embedding model to call. Kept separate from Model (the content model)
+    // because they are different models with different output shapes. gemini-embedding-001 is the
+    // current GA embedding model (text-embedding-004 is retired); EmbeddingService pins its output
+    // to 768 dimensions via outputDimensionality to match the vector(768) column.
+    public string EmbeddingModel { get; set; } = "gemini-embedding-001";
 }

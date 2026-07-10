@@ -1,9 +1,10 @@
 ﻿using Asp.Versioning;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
-using Microsoft.AspNetCore.Authorization;  
-using Microsoft.AspNetCore.Http;           
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;    // TB-156: [EnableRateLimiting]
 
 namespace Buyit.Api.Controllers;
 
@@ -27,6 +28,44 @@ public class ProductController : ControllerBase
         [FromQuery] ProductQueryParameters query)
     {
         var result = await _products.GetAllAsync(query);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Semantic (meaning-based) product search — ranks APPROVED products by cosine similarity to
+    /// the query, so "something to keep my coffee hot" can match a thermos. Public.
+    /// </summary>
+    /// <remarks>
+    /// Each call embeds the query via Gemini, so this endpoint is throttled by the dedicated
+    /// "semantic-search" policy — far more generous than "chat" (60/min vs 10/min) since a shopper
+    /// naturally runs many searches while browsing. Gemini failures surface as 502.
+    /// </remarks>
+    [HttpGet("search/semantic")]
+    [EnableRateLimiting("semantic-search")]   // TB-156: generous per-user/IP throttle for browsing
+    [ProducesResponseType(typeof(IReadOnlyList<SemanticSearchResult>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<IReadOnlyList<SemanticSearchResult>>> SearchSemantic(
+        [FromQuery] string q, [FromQuery] int take = 10)
+    {
+        var results = await _products.SearchSemanticAsync(q, take, HttpContext.RequestAborted);
+        return Ok(results);
+    }
+
+    /// <summary>
+    /// Backfill embeddings for products that don't have one yet (e.g. rows created before TB-156).
+    /// Admin only. Bounded to <paramref name="batchSize"/> products per call and re-runnable/idempotent —
+    /// re-run until the response's <c>remaining</c> is 0.
+    /// </summary>
+    [HttpPost("embeddings/backfill")]
+    [Authorize(Roles = "Admin")]
+    [ProducesResponseType(typeof(BackfillEmbeddingsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<BackfillEmbeddingsResponse>> BackfillEmbeddings([FromQuery] int batchSize = 100)
+    {
+        var result = await _products.BackfillEmbeddingsAsync(batchSize, HttpContext.RequestAborted);
         return Ok(result);
     }
 
