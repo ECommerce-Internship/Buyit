@@ -125,6 +125,24 @@ public class AuthController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Exchange the refresh token issued by the Google OAuth callback (delivered to the SPA in
+    /// the redirect fragment) for a first-party HttpOnly refresh cookie, so the OAuth session survives a
+    /// page reload. Unlike email/password login, the OAuth callback runs on the backend origin, so it
+    /// cannot set a cookie the SPA's own domain can later read; the SPA calls this endpoint once, right
+    /// after sign-in, over its same-origin path. That request is what sets the cookie first-party.
+    /// RefreshTokenAsync ROTATES the token, so the copy briefly exposed in the URL fragment is revoked
+    /// the moment it is exchanged.</summary>
+    [HttpPost("oauth-exchange")]
+    [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AuthResponse>> OAuthExchange([FromBody] RefreshTokenRequest request)
+    {
+        var result = await _auth.RefreshTokenAsync(request);
+        SetRefreshTokenCookie(result.RefreshToken);
+        result.RefreshToken = string.Empty;
+        return Ok(result);
+    }
+
     /// <summary>Revoke the refresh token (read from the HttpOnly cookie) so it can no longer be used. Returns 204 No Content.</summary>
     [HttpPost("logout")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
