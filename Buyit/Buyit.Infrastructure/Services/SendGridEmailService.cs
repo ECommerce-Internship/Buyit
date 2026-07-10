@@ -37,7 +37,7 @@ public class SendGridEmailService : IEmailService
         await SendAsync(userEmail, subject, html);
     }
 
-    public async Task SendLowStockAlertAsync(LowStockMessage message)
+    public async Task SendLowStockAlertAsync(LowStockMessage message, string recipientEmail)
     {
         var subject = $"Low Stock Alert — {message.ProductName}";
         var html = $"""
@@ -50,7 +50,7 @@ public class SendGridEmailService : IEmailService
             <p>Please restock as soon as possible.</p>
             """;
 
-        await SendAsync(_settings.FromEmail, subject, html);
+        await SendAsync(recipientEmail, subject, html);
     }
 
     private async Task SendAsync(string toEmail, string subject, string htmlContent)
@@ -75,5 +75,20 @@ public class SendGridEmailService : IEmailService
             // Fail-open: email failure must never crash the worker or the order flow
             _logger.LogError(ex, "Failed to send email to {Email} — Subject: {Subject}", toEmail, subject);
         }
+    }
+
+    public async Task SendPasswordResetCodeAsync(string recipientEmail, string code)
+    {
+        var subject = "Reset your Buyit password";
+        var html = $"""
+            <h2>Reset your password</h2>
+            <p>Use the code below to reset your Buyit password. It expires in 15 minutes and can only be used once.</p>
+            <p style="font-size: 28px; font-weight: bold; letter-spacing: 4px;">{code}</p>
+            <p>If you didn't request this, you can safely ignore this email — your password will not change.</p>
+            <br/>
+            <p>The Buyit Team</p>
+            """;
+
+        await SendAsync(recipientEmail, subject, html);
     }
 }

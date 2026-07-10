@@ -87,6 +87,15 @@ public class OrderService : IOrderService
                 ["coupon"] = [$"Coupon '{coupon.Code}' is no longer valid. Please remove it and try again."]
             });
 
+        // Store-scoped coupons only apply if the cart still contains something from that store
+        // (items may have been added/removed since the coupon was applied to the cart).
+        if (coupon != null && coupon.StoreId is not null
+            && !cart.CartItems.Any(ci => ci.Product.StoreId == coupon.StoreId))
+            throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+            {
+                ["coupon"] = [$"Coupon '{coupon.Code}' no longer applies — your cart has no items from that store."]
+            });
+
         await using var transaction = await _context.Database.BeginTransactionAsync();
         try
         {
@@ -106,6 +115,9 @@ public class OrderService : IOrderService
 
             // (5) FAN OUT: one StoreOrder per distinct store in the cart.
             decimal subtotalAll = 0m;
+            // Captures the subtotal of just the coupon's own store, when the coupon is store-scoped —
+            // a store-scoped coupon must only discount that store's slice, never the whole order.
+            decimal? couponStoreSubtotal = null;
             foreach (var group in cart.CartItems.GroupBy(ci => ci.Product.StoreId))
             {
                 var store = group.First().Product.Store;
@@ -114,13 +126,11 @@ public class OrderService : IOrderService
                     StoreId = group.Key,
                     Status = OrderStatus.Pending
                 };
-
                 decimal storeSubtotal = 0m;
                 foreach (var item in group)
                 {
                     var line = item.Product.Price * item.Quantity;
                     storeSubtotal += line;
-
                     storeOrder.StoreOrderItems.Add(new StoreOrderItem
                     {
                         ProductId = item.ProductId,
@@ -129,22 +139,50 @@ public class OrderService : IOrderService
                         ProductNameSnapshot = item.Product.Name,
                         Subtotal = line
                     });
-
                     item.Product.Inventory!.QuantityInStock -= item.Quantity;
                     item.Product.Inventory.LastUpdated = DateTime.UtcNow;
                 }
-
                 storeOrder.SubTotal = storeSubtotal;
                 storeOrder.CommissionAmount = Math.Round(storeSubtotal * store.CommissionRate, 2);
                 storeOrder.SellerNetAmount = storeSubtotal - storeOrder.CommissionAmount;
-
                 subtotalAll += storeSubtotal;
                 order.StoreOrders.Add(storeOrder);
+
+                if (coupon is not null && coupon.StoreId == group.Key)
+                    couponStoreSubtotal = storeSubtotal;
             }
 
             // (6) Order-level discount + total.
-            var discountPct = coupon?.DiscountPercentage ?? 0m;
-            order.DiscountAmount = Math.Round(subtotalAll * (discountPct / 100m), 2);
+            // Re-check the usage limit here (not just in CartService.ApplyCouponAsync) — time may have
+            // passed between adding the coupon to the cart and actually checking out, so another
+            // customer could have used up the last slot in between.
+            if (coupon is not null && coupon.UsageLimit is not null && coupon.UsageCount >= coupon.UsageLimit)
+                throw new Buyit.Domain.Exceptions.ValidationException(new Dictionary<string, string[]>
+                {
+                    ["coupon"] = ["This coupon has reached its usage limit."]
+                });
+
+            decimal discountAmount = 0m;
+            if (coupon is not null)
+            {
+                // Store-scoped coupons only discount THEIR store's slice of the order, never the
+                // whole multi-vendor cart — a global coupon (StoreId == null) still discounts everything.
+                var discountBase = coupon.StoreId is null ? subtotalAll : (couponStoreSubtotal ?? 0m);
+
+                if (coupon.DiscountType == Buyit.Domain.Enums.CouponDiscountType.Percentage)
+                {
+                    discountAmount = Math.Round(discountBase * (coupon.DiscountValue / 100m), 2);
+                }
+                else
+                {
+                    // FixedAmount: a flat amount off, never discounting past zero.
+                    discountAmount = Math.Min(coupon.DiscountValue, discountBase);
+                }
+
+                // Record the redemption atomically with the order (same SaveChangesAsync call below).
+                coupon.UsageCount++;
+            }
+            order.DiscountAmount = discountAmount;
             order.TotalAmount = subtotalAll - order.DiscountAmount;
 
             _context.Orders.Add(order);
