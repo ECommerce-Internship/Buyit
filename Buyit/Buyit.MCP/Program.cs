@@ -77,6 +77,7 @@ builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequ
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, McpCurrentUserService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();   // TB-156: ProductService depends on it for semantic search
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
