@@ -44,4 +44,32 @@ public class OrderToolsTests
         await act.Should().ThrowAsync<UnauthorizedException>();
         orders.Verify(o => o.GetMyOrdersAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
     }
+
+    [Fact]
+    public async Task get_my_store_orders_SelfScopesToCallerId_NotAModelParameter()
+    {
+        var orders = new Mock<IOrderService>();
+        orders.Setup(o => o.GetMyStoreOrdersAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
+              .ReturnsAsync(new PaginatedResult<StoreOrderResponse>());
+
+        var sut = new OrderTools(orders.Object, User(7).Object);
+
+        await sut.get_my_store_orders(page: 3, pageSize: 20);
+
+        // The seller id came from the JWT identity (7), never from a tool parameter — a seller can
+        // only ever see their own store's orders. page/pageSize pass straight through.
+        orders.Verify(o => o.GetMyStoreOrdersAsync(7, 3, 20), Times.Once);
+    }
+
+    [Fact]
+    public async Task get_my_store_orders_NoUser_ThrowsUnauthorized()
+    {
+        var orders = new Mock<IOrderService>();
+        var sut = new OrderTools(orders.Object, User(null).Object);
+
+        var act = async () => await sut.get_my_store_orders();
+
+        await act.Should().ThrowAsync<UnauthorizedException>();
+        orders.Verify(o => o.GetMyStoreOrdersAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+    }
 }

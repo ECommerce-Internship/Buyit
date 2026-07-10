@@ -22,4 +22,12 @@ public class DashboardTools
         var result = await _dashboardService.GetSummaryAsync(sellerUserId);
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
+
+    [McpServerTool, Description("Get the best-selling products. sellerUserId is set server-side for sellers (scoped to their own stores) and left null for admins (platform-wide) — do not supply it yourself.")]
+    public async Task<string> get_top_products(
+        [Description("Seller scope — set by the server, not the model. Leave null.")] int? sellerUserId = null)
+    {
+        var result = await _dashboardService.GetTopProductsAsync(sellerUserId);
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
 }
