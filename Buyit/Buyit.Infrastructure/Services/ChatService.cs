@@ -159,6 +159,12 @@ public class ChatService : IChatService
                 string? textAnswer = null;
                 JsonElement functionCall = default;
                 bool hasFunctionCall = false;
+                // The model's turn EXACTLY as Gemini returned it (role + parts). We echo this back
+                // verbatim below instead of rebuilding it, because Gemini 3.x attaches an opaque
+                // "thoughtSignature" to functionCall parts and REJECTS the next round if it isn't
+                // sent back. Cloning the whole content preserves the signature (and any thinking
+                // parts); on 2.x models there's simply no signature and this still works.
+                JsonElement modelTurn = default;
 
                 try
                 {
@@ -166,6 +172,7 @@ public class ChatService : IChatService
                     var modelContent = doc.RootElement
                         .GetProperty("candidates")[0]
                         .GetProperty("content");
+                    modelTurn = modelContent.Clone();   // keep it alive past the 'using'
 
                     foreach (var part in modelContent.GetProperty("parts").EnumerateArray())
                     {
@@ -215,11 +222,8 @@ public class ChatService : IChatService
 
                 var toolArgs = functionCall.TryGetProperty("args", out var a) ? a : default;
 
-                contents.Add(new
-                {
-                    role = "model",
-                    parts = new object[] { new { functionCall } }
-                });
+                // Echo the model's tool-call turn back verbatim (incl. Gemini 3.x thoughtSignature).
+                contents.Add(modelTurn);
 
                 // 3c) Run the real tool via MCP and add its result as a functionResponse turn.
                 var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, callerId, cancellationToken);

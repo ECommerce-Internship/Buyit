@@ -27,7 +27,9 @@ builder.Configuration
 
 // EF Core — PostgreSQL
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        o => o.UseVector()));   // TB-156: map the shared AppDbContext's Product.Embedding vector(768)
 
 // Redis
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379,abortConnect=false";
