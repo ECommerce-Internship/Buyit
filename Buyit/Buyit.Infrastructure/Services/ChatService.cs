@@ -54,6 +54,27 @@ public class ChatService : IChatService
         "checkout",              // place an order from the caller's own cart (self-scoped)
     };
 
+    // Extra tools a Seller may use ON TOP OF the shopper tools above — each read-only and
+    // scoped to the seller's OWN store. A seller is still a shopper, so their effective set is
+    // NonAdminTools ∪ SellerTools (see GetToolsForRole). Store scope is enforced server-side:
+    // 'sellerUserId'-taking tools are forced to the caller's id in ApplyServerSideIdentity, and
+    // get_my_store_orders self-scopes inside the MCP tool from the JWT identity.
+    private static readonly HashSet<string> SellerTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "get_dashboard_summary",   // own-store revenue/orders/growth (sellerUserId forced to caller)
+        "get_top_products",        // own-store best sellers (sellerUserId forced to caller)
+        "get_low_stock_products",  // own-store low-stock list (sellerUserId forced to caller)
+        "get_my_store_orders",     // orders against the caller's own store(s) (self-scoped in MCP)
+    };
+
+    // Store-scoped tools whose 'sellerUserId' filter must be pinned to the caller when a Seller
+    // asks — the model must never widen it to another store or platform-wide. Admins are NOT
+    // pinned (they keep the free filter — null = platform-wide, or any seller id).
+    private static readonly HashSet<string> SellerScopedTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "get_dashboard_summary", "get_top_products", "get_low_stock_products",
+    };
+
     // Argument names the model must NEVER control (the CALLER's own identity). We delete these
     // from model output and, where a tool needs identity, set them ourselves from the JWT.
     // Note: 'sellerUserId' is deliberately NOT here — it is a filter argument on the admin-only
@@ -133,6 +154,11 @@ public class ChatService : IChatService
             var allowedTools = GetToolsForRole(callerRole, allTools);
             var toolsPayload = BuildToolsPayload(allowedTools);
 
+            // A seller may only see their OWN store. If they ask about another store we refuse
+            // outright (below) rather than silently rescoping — otherwise the model narrates the
+            // seller's own data as if it were the other store's, which is misleading.
+            var callerIsSeller = string.Equals(callerRole, "Seller", StringComparison.OrdinalIgnoreCase);
+
             // 2) Seed the conversation: prior turns first (so Gemini has context), then the new message.
             var contents = new List<object>();
             foreach (var turn in history)
@@ -159,6 +185,12 @@ public class ChatService : IChatService
                 string? textAnswer = null;
                 JsonElement functionCall = default;
                 bool hasFunctionCall = false;
+                // The model's turn EXACTLY as Gemini returned it (role + parts). We echo this back
+                // verbatim below instead of rebuilding it, because Gemini 3.x attaches an opaque
+                // "thoughtSignature" to functionCall parts and REJECTS the next round if it isn't
+                // sent back. Cloning the whole content preserves the signature (and any thinking
+                // parts); on 2.x models there's simply no signature and this still works.
+                JsonElement modelTurn = default;
 
                 try
                 {
@@ -166,6 +198,7 @@ public class ChatService : IChatService
                     var modelContent = doc.RootElement
                         .GetProperty("candidates")[0]
                         .GetProperty("content");
+                    modelTurn = modelContent.Clone();   // keep it alive past the 'using'
 
                     foreach (var part in modelContent.GetProperty("parts").EnumerateArray())
                     {
@@ -215,11 +248,22 @@ public class ChatService : IChatService
 
                 var toolArgs = functionCall.TryGetProperty("args", out var a) ? a : default;
 
-                contents.Add(new
+                // A seller naming a store that isn't their own → privacy refusal, before any data is
+                // fetched. (ApplyServerSideIdentity still pins sellerUserId to the caller as a
+                // security backstop, so nothing leaks even if this check is ever bypassed.)
+                if (callerIsSeller
+                    && SellerScopedTools.Contains(toolName)
+                    && SellerNamedForeignStore(toolArgs, callerId))
                 {
-                    role = "model",
-                    parts = new object[] { new { functionCall } }
-                });
+                    _logger.LogWarning(
+                        "Seller {Caller} asked for another store's data via '{Tool}' — refused.", callerId, toolName);
+                    const string refusal = "Sorry, I can't provide this information due to privacy reasons.";
+                    await PersistTurnAsync(conversation, callerId, history, request.message, refusal, cancellationToken);
+                    return new ChatResponse(refusal, conversation);
+                }
+
+                // Echo the model's tool-call turn back verbatim (incl. Gemini 3.x thoughtSignature).
+                contents.Add(modelTurn);
 
                 // 3c) Run the real tool via MCP and add its result as a functionResponse turn.
                 var toolOutput = await CallMcpToolAsync(mcp, toolName, toolArgs, callerId, cancellationToken);
@@ -275,16 +319,21 @@ public class ChatService : IChatService
         await _conversationStore.SaveAsync(conversationId, userId, history, cancellationToken);
     }
 
-    // Rule 2 — role-based tool filtering. Admin sees everything; everyone else gets the
-    // safe subset. The model literally cannot request a tool that isn't in this list.
+    // Rule 2 — role-based tool filtering. Admin sees everything; a Seller gets the shopper subset
+    // PLUS the store-scoped seller tools; a Customer gets only the shopper subset. The model
+    // literally cannot request a tool that isn't in the returned list.
     private static IReadOnlyList<McpToolDescriptor> GetToolsForRole(
         string? role, IReadOnlyList<McpToolDescriptor> allTools)
     {
         if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
             return allTools;
 
+        var allowed = NonAdminTools;
+        if (string.Equals(role, "Seller", StringComparison.OrdinalIgnoreCase))
+            allowed = new HashSet<string>(NonAdminTools.Concat(SellerTools), StringComparer.OrdinalIgnoreCase);
+
         return allTools
-            .Where(tool => NonAdminTools.Contains(tool.Name))
+            .Where(tool => allowed.Contains(tool.Name))
             .ToList();
     }
 
@@ -484,12 +533,39 @@ public class ChatService : IChatService
                 safeArgs["isAdmin"] = _currentUser.IsAdmin;
                 break;
 
-            // Other tools (search_products, get_product, get_low_stock_products,
-            // get_dashboard_summary, generate_product_content) take no per-user identity arg,
-            // so there is nothing to inject — the stripping above already removed any the model tried.
+            // Other tools (search_products, get_product, get_my_orders, get_my_store_orders,
+            // generate_product_content) take no per-user identity arg here — get_my_store_orders
+            // self-scopes inside the MCP tool from the JWT, and the rest are public/self-scoped.
+        }
+
+        // (helper SellerNamedForeignStore, below, decides the privacy refusal from these same args.)
+
+        // Store-scoped filter tools: when a SELLER asks, pin 'sellerUserId' to their own id so the
+        // model can never read another store or go platform-wide. Admins keep the free filter, so
+        // we leave their (possibly null) value untouched. Runs after the switch so it also catches
+        // any 'sellerUserId' the model tried to smuggle in for a seller.
+        if (SellerScopedTools.Contains(toolName)
+            && string.Equals(_currentUser.Role, "Seller", StringComparison.OrdinalIgnoreCase))
+        {
+            safeArgs["sellerUserId"] = callerId;
         }
 
         return safeArgs;
+    }
+
+    // True when a seller's tool call names a store OTHER than their own — i.e. the model produced a
+    // 'sellerUserId' that is present and not the caller's id. Absent, null, or equal to the caller
+    // all mean "their own store" (allowed); anything else is a foreign store → privacy refusal.
+    private static bool SellerNamedForeignStore(JsonElement args, int callerId)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return false;
+        if (!args.TryGetProperty("sellerUserId", out var value)) return false;
+        if (value.ValueKind == JsonValueKind.Null) return false;
+
+        // A clean integer we can compare; any other shape (string, etc.) is treated as foreign.
+        return !(value.ValueKind == JsonValueKind.Number
+                 && value.TryGetInt32(out var id)
+                 && id == callerId);
     }
 
     // Converts Gemini's functionCall.args JSON object into the dictionary CallToolAsync wants.

@@ -49,10 +49,11 @@ public class ProductTools
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    [McpServerTool, Description("Get all products that are at or below their low stock threshold.")]
-    public async Task<string> get_low_stock_products()
+    [McpServerTool, Description("Get all products that are at or below their low stock threshold. sellerUserId is set server-side for sellers (scoped to their own stores) and left null for admins (platform-wide) — do not supply it yourself.")]
+    public async Task<string> get_low_stock_products(
+        [Description("Seller scope — set by the server, not the model. Leave null.")] int? sellerUserId = null)
     {
-        var result = await _inventoryService.GetLowStockAsync();
+        var result = await _inventoryService.GetLowStockAsync(sellerUserId);
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
 }

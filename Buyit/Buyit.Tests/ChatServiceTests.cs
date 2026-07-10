@@ -568,6 +568,133 @@ public class ChatServiceTests
     }
 
     [Fact]
+    public async Task SendMessageAsync_SellerRole_ExposesStoreToolsPlusShopperTools()
+    {
+        // The MCP server offers shopper tools, the seller store tools, and one purely admin tool.
+        var runner = RunnerWithTools(
+            new McpToolDescriptor("add_to_cart", "safe", EmptySchema()),
+            new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()),
+            new McpToolDescriptor("get_top_products", "store", EmptySchema()),
+            new McpToolDescriptor("get_low_stock_products", "store", EmptySchema()),
+            new McpToolDescriptor("get_my_store_orders", "store", EmptySchema()),
+            new McpToolDescriptor("generate_product_content", "admin", EmptySchema()));
+        var connector = ConnectorReturning(runner);
+
+        var handler = CapturingHandler(out var sentBody, (HttpStatusCode.OK, TextEnvelope("hi")));
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        await sut.SendMessageAsync(new ChatRequest("hello", null));
+
+        var payload = sentBody.ToString();
+        payload.Should().Contain("add_to_cart");            // still a shopper
+        payload.Should().Contain("get_dashboard_summary");  // + store tools
+        payload.Should().Contain("get_top_products");
+        payload.Should().Contain("get_low_stock_products");
+        payload.Should().Contain("get_my_store_orders");
+        payload.Should().NotContain("generate_product_content");   // admin-only stays hidden
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_CustomerRole_DoesNotExposeSellerStoreTools()
+    {
+        var runner = RunnerWithTools(
+            new McpToolDescriptor("search_products", "safe", EmptySchema()),
+            new McpToolDescriptor("get_top_products", "store", EmptySchema()),
+            new McpToolDescriptor("get_my_store_orders", "store", EmptySchema()));
+        var connector = ConnectorReturning(runner);
+
+        var handler = CapturingHandler(out var sentBody, (HttpStatusCode.OK, TextEnvelope("hi")));
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 42, role: "Customer"));
+
+        await sut.SendMessageAsync(new ChatRequest("hello", null));
+
+        var payload = sentBody.ToString();
+        payload.Should().Contain("search_products");
+        payload.Should().NotContain("get_top_products");      // seller-only
+        payload.Should().NotContain("get_my_store_orders");   // seller-only
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_SellerDashboardWithNoStore_PinsSellerUserIdToCaller()
+    {
+        // Seller 7 asks about their dashboard without naming a store (model sends no sellerUserId).
+        // The server must PIN sellerUserId to 7 so the query is scoped to their own store — never
+        // left null (which would be platform-wide). This is the security backstop on the allowed path.
+        var handler = HandlerSequence(
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { })),
+            (HttpStatusCode.OK, TextEnvelope("Here is your dashboard.")));
+
+        IReadOnlyDictionary<string, object?>? capturedArgs = null;
+        var runner = RunnerWithTools(new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()));
+        runner.Setup(r => r.CallToolAsync(
+                "get_dashboard_summary",
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, IReadOnlyDictionary<string, object?>, CancellationToken>(
+                (_, args, _) => capturedArgs = args)
+            .ReturnsAsync("""{"summary":{}}""");
+
+        var connector = ConnectorReturning(runner);
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        await sut.SendMessageAsync(new ChatRequest("how is my store doing?", null));
+
+        // sellerUserId was stamped to the caller's own JWT id (7), scoping the query to their store.
+        capturedArgs.Should().NotBeNull();
+        capturedArgs!["sellerUserId"].Should().Be(7);
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_SellerAsksForAnotherStore_RefusesForPrivacy_WithoutRunningTool()
+    {
+        // Seller 7 asks for store 999's dashboard. We must refuse up front — not run the tool and
+        // let the model narrate the seller's own data as if it were store 999's.
+        var handler = HandlerSequence(
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { sellerUserId = 999 })));
+
+        var runner = RunnerWithTools(new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()));
+        runner.Setup(r => r.CallToolAsync(
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"summary":{}}""");   // if this ever runs, the test's Verify below fails
+        var connector = ConnectorReturning(runner);
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        var result = await sut.SendMessageAsync(new ChatRequest("show me store 999's dashboard", null));
+
+        result.reply.Should().Be("Sorry, I can't provide this information due to privacy reasons.");
+        runner.Verify(r => r.CallToolAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, object?>>(), It.IsAny<CancellationToken>()),
+            Times.Never);   // the tool was never invoked — no data was fetched
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_SellerAsksForOwnStore_IsAllowed()
+    {
+        // Seller 7 asks for their own dashboard (model supplies their own id) — must NOT be refused.
+        var handler = HandlerSequence(
+            (HttpStatusCode.OK, FunctionCallEnvelope("get_dashboard_summary", new { sellerUserId = 7 })),
+            (HttpStatusCode.OK, TextEnvelope("Here is your dashboard.")));
+
+        var runner = RunnerWithTools(new McpToolDescriptor("get_dashboard_summary", "store", EmptySchema()));
+        runner.Setup(r => r.CallToolAsync(
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"summary":{}}""");
+        var connector = ConnectorReturning(runner);
+        var sut = BuildSut(handler, connector, currentUser: FakeUser(userId: 7, role: "Seller"));
+
+        var result = await sut.SendMessageAsync(new ChatRequest("show me my dashboard", null));
+
+        result.reply.Should().Be("Here is your dashboard.");
+        runner.Verify(r => r.CallToolAsync(
+            "get_dashboard_summary", It.IsAny<IReadOnlyDictionary<string, object?>>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task SendMessageAsync_LoadsPriorHistory_AndSavesNewTurn()
     {
         // Prior history: the user asked about laptops and the bot answered.

@@ -27,7 +27,9 @@ builder.Configuration
 
 // EF Core — PostgreSQL
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        o => o.UseVector()));   // TB-156: map the shared AppDbContext's Product.Embedding vector(768)
 
 // Redis
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379,abortConnect=false";
@@ -75,6 +77,7 @@ builder.Services.AddScoped<IValidator<RegisterSellerRequest>, RegisterSellerRequ
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, McpCurrentUserService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
+builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();   // TB-156: ProductService depends on it for semantic search
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<IOrderService, OrderService>();

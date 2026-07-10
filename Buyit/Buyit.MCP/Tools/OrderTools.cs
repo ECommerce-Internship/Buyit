@@ -53,6 +53,20 @@ public class OrderTools
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
 
+    [McpServerTool, Description("Get the paginated orders placed against the signed-in SELLER's own store(s). Always self-scoped to the caller's stores — there is no seller/user parameter.")]
+    public async Task<string> get_my_store_orders(
+        [Description("Page number (default 1)")] int page = 1,
+        [Description("Page size (default 10)")] int pageSize = 10)
+    {
+        // Self-scoped: the seller id comes from the JWT identity, so a seller can only ever
+        // see orders for their OWN stores — the model has no parameter to widen this.
+        var sellerUserId = _currentUser.UserId
+            ?? throw new UnauthorizedException("You must be signed in to view your store orders.");
+
+        var result = await _orderService.GetMyStoreOrdersAsync(sellerUserId, page, pageSize);
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
+
     [McpServerTool, Description("Place an order (checkout) for everything currently in the signed-in customer's cart, shipping to the given address. This places a REAL order and cannot be undone — ALWAYS confirm with the user before calling it, and make sure their cart is not empty. Returns the created order.")]
     public async Task<string> checkout(
         [Description("Shipping address line 1 (street and number)")] string shippingLine1,
