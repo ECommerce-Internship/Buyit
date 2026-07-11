@@ -1,3 +1,4 @@
+using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
@@ -10,6 +11,7 @@ using FluentValidation;
 using FluentValidation.Results;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
 
@@ -52,6 +54,7 @@ public class ProductOwnershipTests
             new Mock<ICacheService>().Object, new Mock<IBlobStorageService>().Object,
             current.Object, gemini.Object, generateContentV.Object,
             embeddings.Object,
+            Options.Create(new GeminiSettings()),
             new Mock<ILogger<ProductService>>().Object);
     }
 
