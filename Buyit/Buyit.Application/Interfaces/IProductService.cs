@@ -32,6 +32,12 @@ public interface IProductService
     // and returns a summary (added count, failed count, per-row errors).
     Task<ImportResultDto> ImportAsync(Stream fileStream);
 
+    // Bulk import scoped to ONE store: every valid row is created in `storeId`, and SKU
+    // uniqueness is checked PER-STORE. The caller must own that store (Seller) or be an Admin —
+    // enforced inside via EnsureCanManageStoreAsync, which throws ForbiddenException (403)
+    // otherwise. Returns the same summary shape as ImportAsync.
+    Task<ImportResultDto> ImportForStoreAsync(Stream fileStream, int storeId);
+
     // TB-42: set/replace this product's image. Returns the new public image URL.
     Task<string> SetProductImageAsync(int id, IFormFile file);
 

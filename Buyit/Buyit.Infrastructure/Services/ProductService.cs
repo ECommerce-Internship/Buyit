@@ -747,40 +747,80 @@ public class ProductService : IProductService
 
     public async Task<ImportResultDto> ImportAsync(Stream fileStream)
     {
-        // The summary we will fill in and return.
+        // Admin bulk import: every valid row is created in the default store (StoreId = 1) and SKU
+        // uniqueness is checked across the WHOLE catalogue. Seller imports use ImportForStoreAsync
+        // (store-scoped + ownership-checked) below; both share the helpers underneath.
+        return await RunImportAsync(fileStream, storeId: 1, skuScope: null);
+    }
+
+    public async Task<ImportResultDto> ImportForStoreAsync(Stream fileStream, int storeId)
+    {
+        // Ownership FIRST: a seller may only import into a store they own; an admin may target any
+        // store. EnsureCanManageStoreAsync throws ForbiddenException (403) otherwise — before we
+        // touch the file, so an unauthorised caller learns nothing about the upload.
+        await EnsureCanManageStoreAsync(storeId);
+
+        // SKU uniqueness is PER-STORE here (matches the (StoreId, Sku) unique index and CreateAsync),
+        // so two different stores may each carry the same SKU.
+        return await RunImportAsync(fileStream, storeId, skuScope: storeId);
+    }
+
+    // Shared engine for both imports. `storeId` is the store every accepted row is created in;
+    // `skuScope` controls which existing SKUs collide — null = the whole catalogue (admin),
+    // a value = only that store (seller).
+    private async Task<ImportResultDto> RunImportAsync(Stream fileStream, int storeId, int? skuScope)
+    {
         var result = new ImportResultDto();
 
-        // 1) Load EVERY category once into a case-INSENSITIVE Name -> Id lookup.
-        //    Building the dictionary manually (indexer, not Add) means duplicate category
-        //    names in the DB won't throw — the last one simply wins. OrdinalIgnoreCase makes
-        //    "Books", "books" and "BOOKS" all match without culture surprises.
-        var categories = await _db.Categories.AsNoTracking().ToListAsync();
-        var categoriesByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var c in categories)
-            categoriesByName[c.Name] = c.Id;
-
-        // 1b) Load EVERY existing SKU once (INCLUDING soft-deleted ones, exactly like CreateAsync,
-        //     because the unique index ignores the soft-delete flag). This lets us reject a row
-        //     whose SKU is already taken — BEFORE SaveChanges — instead of crashing the whole import.
-        var existingSkus = await _db.Products
-            .IgnoreQueryFilters()
-            .Select(p => p.Sku)
-            .ToListAsync();
-        var existingSkuSet = new HashSet<string>(existingSkus, StringComparer.OrdinalIgnoreCase);
-
-        // Track SKUs we have ALREADY accepted in THIS file, to catch duplicates within the upload.
-        var skusSeenInFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // We collect only the GOOD products here, then insert them all at the end.
+        var categoriesByName = await LoadCategoryIdsByNameAsync();
+        var existingSkuSet = await LoadExistingSkusAsync(skuScope);
         var productsToAdd = new List<Product>();
 
-        // 2) Open the uploaded stream as an Excel workbook. A renamed/corrupt/password-protected
-        //    file passes the controller's ".xlsx" name check but fails HERE — so we catch it and
-        //    return a clean 400 (ValidationException) instead of an ugly 500.
-        ExcelPackage package;
+        // A renamed/corrupt/password-protected file passes the controller's ".xlsx" name check but
+        // fails HERE; OpenWorkbook turns that into a clean 400 (ValidationException) instead of a 500.
+        using var package = OpenWorkbook(fileStream);
+        var sheet = package.Workbook.Worksheets.FirstOrDefault();
+
+        // 'Dimension' is null when the sheet is completely empty — nothing to import.
+        if (sheet?.Dimension is not null)
+            BuildProductsFromSheet(sheet, categoriesByName, existingSkuSet, storeId, productsToAdd, result);
+
+        await SaveImportedProductsAsync(productsToAdd);
+
+        result.AddedCount = productsToAdd.Count;
+        result.FailedCount = result.Errors.Count;
+        return result;
+    }
+
+    // Case-INSENSITIVE Category Name -> Id lookup. Uses the indexer (not Add) so duplicate category
+    // names in the DB won't throw — the last one simply wins.
+    private async Task<Dictionary<string, int>> LoadCategoryIdsByNameAsync()
+    {
+        var categories = await _db.Categories.AsNoTracking().ToListAsync();
+        var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in categories)
+            byName[c.Name] = c.Id;
+        return byName;
+    }
+
+    // The SKUs already taken, so a row can be rejected BEFORE SaveChanges instead of crashing the
+    // whole import. Includes soft-deleted rows (the unique index ignores the soft-delete flag).
+    // storeId == null => the whole catalogue (admin import); a value => only that store (seller).
+    private async Task<HashSet<string>> LoadExistingSkusAsync(int? storeId)
+    {
+        var query = _db.Products.IgnoreQueryFilters().AsQueryable();
+        if (storeId is int sid)
+            query = query.Where(p => p.StoreId == sid);
+        var skus = await query.Select(p => p.Sku).ToListAsync();
+        return new HashSet<string>(skus, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Opens the uploaded stream as an .xlsx workbook, or throws a clean ValidationException (400).
+    private static ExcelPackage OpenWorkbook(Stream fileStream)
+    {
         try
         {
-            package = new ExcelPackage(fileStream);
+            return new ExcelPackage(fileStream);
         }
         catch
         {
@@ -793,162 +833,161 @@ public class ProductService : IProductService
                 }
             });
         }
+    }
 
-        using (package)
+    // Walks each data row of `sheet` (row 1 = headers), validates it, and either appends a built
+    // Product (owned by `storeId`) to `productsToAdd` or one ImportRowError to `result`. Shared by
+    // the admin and seller imports — the ONLY differences are the target store and the scope of
+    // `existingSkuSet`, both decided by the caller.
+    private static void BuildProductsFromSheet(
+        ExcelWorksheet sheet,
+        Dictionary<string, int> categoriesByName,
+        HashSet<string> existingSkuSet,
+        int storeId,
+        List<Product> productsToAdd,
+        ImportResultDto result)
+    {
+        // Track SKUs we have ALREADY accepted in THIS file, to catch duplicates within the upload.
+        var skusSeenInFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // The last used row number. Headers are on row 1, so data starts at row 2.
+        int lastRow = sheet.Dimension.End.Row;
+
+        for (int row = 2; row <= lastRow; row++)
         {
-            // The first sheet in the workbook. FirstOrDefault returns null if there are none.
-            var sheet = package.Workbook.Worksheets.FirstOrDefault();
+            // Read each column as displayed text, then trim surrounding spaces.
+            // Column order (from the ticket): 1=Name 2=SKU 3=Price 4=CategoryName 5=Description 6=InitialStock
+            string name = sheet.Cells[row, 1].Text.Trim();
+            string sku = sheet.Cells[row, 2].Text.Trim();
+            string priceText = sheet.Cells[row, 3].Text.Trim();
+            string categoryName = sheet.Cells[row, 4].Text.Trim();
+            string description = sheet.Cells[row, 5].Text.Trim();
+            string stockText = sheet.Cells[row, 6].Text.Trim();
 
-            // 'Dimension' is null when the sheet is completely empty (no cells at all).
-            if (sheet?.Dimension is null)
+            // Skip a fully blank row (e.g. trailing empty lines) WITHOUT counting it as an error.
+            if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(sku) &&
+                string.IsNullOrWhiteSpace(priceText) && string.IsNullOrWhiteSpace(categoryName) &&
+                string.IsNullOrWhiteSpace(description) && string.IsNullOrWhiteSpace(stockText))
             {
-                // Nothing to import. AddedCount stays 0, Errors stays empty.
-                return result;
+                continue;
             }
 
-            // The last used row number. Headers are on row 1, so data starts at row 2.
-            int lastRow = sheet.Dimension.End.Row;
+            // --- VALIDATION: each failed check records ONE reason and skips the row. ---
 
-            // 3) Walk every data row.
-            for (int row = 2; row <= lastRow; row++)
+            // NAME: present and not longer than the DB column.
+            if (string.IsNullOrWhiteSpace(name))
             {
-                // Read each column as displayed text, then trim surrounding spaces.
-                // Column order (from the ticket): 1=Name 2=SKU 3=Price 4=CategoryName 5=Description 6=InitialStock
-                string name = sheet.Cells[row, 1].Text.Trim();
-                string sku = sheet.Cells[row, 2].Text.Trim();
-                string priceText = sheet.Cells[row, 3].Text.Trim();
-                string categoryName = sheet.Cells[row, 4].Text.Trim();
-                string description = sheet.Cells[row, 5].Text.Trim();
-                string stockText = sheet.Cells[row, 6].Text.Trim();
-
-                // Skip a fully blank row (e.g. trailing empty lines) WITHOUT counting it as an error.
-                if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(sku) &&
-                    string.IsNullOrWhiteSpace(priceText) && string.IsNullOrWhiteSpace(categoryName) &&
-                    string.IsNullOrWhiteSpace(description) && string.IsNullOrWhiteSpace(stockText))
-                {
-                    continue;
-                }
-
-                // --- VALIDATION: each failed check records ONE reason and skips the row. ---
-
-                // NAME: present and not longer than the DB column.
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = "Name is required." });
-                    continue;
-                }
-                if (name.Length > MaxNameLength)
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"Name must be at most {MaxNameLength} characters." });
-                    continue;
-                }
-
-                // SKU: present, within length, not already used in the DB, not duplicated in this file.
-                if (string.IsNullOrWhiteSpace(sku))
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = "SKU is required." });
-                    continue;
-                }
-                if (sku.Length > MaxSkuLength)
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"SKU must be at most {MaxSkuLength} characters." });
-                    continue;
-                }
-                if (existingSkuSet.Contains(sku))
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"SKU '{sku}' already exists in the catalogue." });
-                    continue;
-                }
-                if (!skusSeenInFile.Add(sku))   // Add returns false if the SKU was already seen this file.
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"Duplicate SKU '{sku}' appears more than once in the file." });
-                    continue;
-                }
-
-                // PRICE: parse tolerant of locale (try invariant first, then the server's culture),
-                //        require > 0, and cap it so it can never overflow the decimal(18,2) column.
-                bool priceParsed =
-                    decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal price) ||
-                    decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.CurrentCulture, out price);
-                if (!priceParsed || price <= 0)
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = "Price must be a number greater than 0." });
-                    continue;
-                }
-                if (price > MaxPrice)
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"Price must be {MaxPrice:0} or less." });
-                    continue;
-                }
-
-                // CATEGORY: required and must resolve to an existing category id.
-                if (string.IsNullOrWhiteSpace(categoryName) ||
-                    !categoriesByName.TryGetValue(categoryName, out int categoryId))
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"Category '{categoryName}' was not found." });
-                    continue;
-                }
-
-                // DESCRIPTION: optional, but cannot exceed the DB column length.
-                if (description.Length > MaxDescriptionLength)
-                {
-                    result.Errors.Add(new ImportRowError { Row = row, Reason = $"Description must be at most {MaxDescriptionLength} characters." });
-                    continue;
-                }
-
-                // INITIAL STOCK: blank => 0; if provided it must be a whole number >= 0.
-                int initialStock = 0;
-                if (!string.IsNullOrWhiteSpace(stockText))
-                {
-                    if (!int.TryParse(stockText, NumberStyles.Integer, CultureInfo.InvariantCulture, out initialStock) || initialStock < 0)
-                    {
-                        result.Errors.Add(new ImportRowError { Row = row, Reason = "Initial stock must be a whole number of 0 or more." });
-                        // Roll back the SKU reservation so it isn't wrongly counted as 'used'.
-                        skusSeenInFile.Remove(sku);
-                        continue;
-                    }
-                }
-
-                // --- The row passed: build a Product PLUS its one-to-one Inventory record. ---
-                // Setting the Inventory navigation lets EF insert BOTH rows together (same as CreateAsync).
-                productsToAdd.Add(new Product
-                {
-                    Name = name,
-                    Description = description,
-                    Sku = sku,
-                    Price = price,
-                    CategoryId = categoryId,
-                    StoreId = 1,
-                    CreatedAt = DateTime.UtcNow,
-                    IsDeleted = false,
-                    Inventory = new Inventory { QuantityInStock = initialStock }
-                });
+                result.Errors.Add(new ImportRowError { Row = row, Reason = "Name is required." });
+                continue;
+            }
+            if (name.Length > MaxNameLength)
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"Name must be at most {MaxNameLength} characters." });
+                continue;
             }
 
-            // 4) BULK INSERT: queue all good products, then save once (one transaction).
-            //    Every known cause of a failed insert was filtered out above, so this should
-            //    never throw. The try/catch is a last-resort safety net (e.g. a race where the
-            //    same SKU is inserted by someone else between our check and our save): we surface
-            //    a clear 409 instead of a raw 500, and — being one transaction — nothing is saved.
-            if (productsToAdd.Count > 0)
+            // SKU: present, within length, not already used in this scope, not duplicated in this file.
+            if (string.IsNullOrWhiteSpace(sku))
             {
-                try
+                result.Errors.Add(new ImportRowError { Row = row, Reason = "SKU is required." });
+                continue;
+            }
+            if (sku.Length > MaxSkuLength)
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"SKU must be at most {MaxSkuLength} characters." });
+                continue;
+            }
+            if (existingSkuSet.Contains(sku))
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"SKU '{sku}' already exists." });
+                continue;
+            }
+            if (!skusSeenInFile.Add(sku))   // Add returns false if the SKU was already seen this file.
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"Duplicate SKU '{sku}' appears more than once in the file." });
+                continue;
+            }
+
+            // PRICE: parse tolerant of locale (try invariant first, then the server's culture),
+            //        require > 0, and cap it so it can never overflow the decimal(18,2) column.
+            bool priceParsed =
+                decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal price) ||
+                decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.CurrentCulture, out price);
+            if (!priceParsed || price <= 0)
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = "Price must be a number greater than 0." });
+                continue;
+            }
+            if (price > MaxPrice)
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"Price must be {MaxPrice:0} or less." });
+                continue;
+            }
+
+            // CATEGORY: required and must resolve to an existing category id.
+            if (string.IsNullOrWhiteSpace(categoryName) ||
+                !categoriesByName.TryGetValue(categoryName, out int categoryId))
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"Category '{categoryName}' was not found." });
+                continue;
+            }
+
+            // DESCRIPTION: optional, but cannot exceed the DB column length.
+            if (description.Length > MaxDescriptionLength)
+            {
+                result.Errors.Add(new ImportRowError { Row = row, Reason = $"Description must be at most {MaxDescriptionLength} characters." });
+                continue;
+            }
+
+            // INITIAL STOCK: blank => 0; if provided it must be a whole number >= 0.
+            int initialStock = 0;
+            if (!string.IsNullOrWhiteSpace(stockText))
+            {
+                if (!int.TryParse(stockText, NumberStyles.Integer, CultureInfo.InvariantCulture, out initialStock) || initialStock < 0)
                 {
-                    _db.Products.AddRange(productsToAdd);
-                    await _db.SaveChangesAsync();
-                }
-                catch (DbUpdateException)
-                {
-                    throw new ConflictException(
-                        "The import could not be saved because of a data conflict (for example a SKU created " +
-                        "by someone else at the same moment). No products were imported — please try again.");
+                    result.Errors.Add(new ImportRowError { Row = row, Reason = "Initial stock must be a whole number of 0 or more." });
+                    // Roll back the SKU reservation so it isn't wrongly counted as 'used'.
+                    skusSeenInFile.Remove(sku);
+                    continue;
                 }
             }
 
-            // 5) Fill in the counts and return the summary.
-            result.AddedCount = productsToAdd.Count;
-            result.FailedCount = result.Errors.Count;
-            return result;
+            // --- The row passed: build a Product PLUS its one-to-one Inventory record. ---
+            // Setting the Inventory navigation lets EF insert BOTH rows together (same as CreateAsync).
+            productsToAdd.Add(new Product
+            {
+                Name = name,
+                Description = description,
+                Sku = sku,
+                Price = price,
+                CategoryId = categoryId,
+                StoreId = storeId,
+                CreatedAt = DateTime.UtcNow,
+                IsDeleted = false,
+                Inventory = new Inventory { QuantityInStock = initialStock }
+            });
+        }
+    }
+
+    // Inserts all accepted products in ONE transaction. Everything that could fail was filtered out
+    // above, so this should never throw; the catch is a last-resort net (e.g. a race where the same
+    // SKU is inserted by someone else between our check and our save) that surfaces a clear 409
+    // instead of a raw 500 — and, being one transaction, nothing is saved on failure.
+    private async Task SaveImportedProductsAsync(List<Product> productsToAdd)
+    {
+        if (productsToAdd.Count == 0)
+            return;
+
+        try
+        {
+            _db.Products.AddRange(productsToAdd);
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            throw new ConflictException(
+                "The import could not be saved because of a data conflict (for example a SKU created " +
+                "by someone else at the same moment). No products were imported — please try again.");
         }
     }
     // Builds a STABLE, UNIQUE cache key for one specific combination of query parameters.

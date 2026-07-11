@@ -32,7 +32,8 @@ public class ProductServiceTests
         out Mock<IValidator<CreateProductRequest>> createValidatorMock,
         out Mock<IValidator<UpdateProductRequest>> updateValidatorMock,
         out Mock<IGeminiService> geminiMock,
-        out Mock<IEmbeddingService> embeddingMock)
+        out Mock<IEmbeddingService> embeddingMock,
+        ICurrentUserService? currentUser = null)   // override to test non-admin ownership paths
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -100,7 +101,7 @@ public class ProductServiceTests
             updateValidatorMock.Object,
             cacheMock.Object,
             blobMock.Object,
-            currentUserMock.Object,
+            currentUser ?? currentUserMock.Object,
             geminiMock.Object,
             generateContentValidatorMock.Object,
             embeddingMock.Object,
@@ -311,6 +312,85 @@ public class ProductServiceTests
         result.Errors.Should().ContainSingle()
               .Which.Row.Should().Be(2);
         result.Errors[0].Reason.Should().Contain("Price");
+    }
+
+    // --- Seller bulk import (store-scoped): every row lands in the given store, ownership is
+    // enforced, and SKU uniqueness is PER-STORE. ---
+
+    [Fact]
+    public async Task ImportForStore_ValidRows_CreatesProductsInThatStore()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out _);   // default user = Admin, store 1
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(
+            ("Mouse",    "SLR-001", "10.00", "Electronics", "Desc 1", "5"),
+            ("Keyboard", "SLR-002", "20.00", "Electronics", "Desc 2", "3")
+        );
+
+        ImportResultDto result = await sut.ImportForStoreAsync(excel, storeId: 1);
+
+        result.AddedCount.Should().Be(2);
+        result.FailedCount.Should().Be(0);
+        db.Products.Should().HaveCount(2);
+        db.Products.Should().OnlyContain(p => p.StoreId == 1);
+    }
+
+    [Fact]
+    public async Task ImportForStore_CallerDoesNotOwnStore_ThrowsForbiddenException()
+    {
+        // A non-admin seller (UserId 99) who does NOT own store 1 (its owner is user 1).
+        var outsider = new Mock<ICurrentUserService>();
+        outsider.Setup(c => c.IsAdmin).Returns(false);
+        outsider.Setup(c => c.UserId).Returns(99);
+
+        var sut = BuildSut(out var db, out _, out _, out _, out _, outsider.Object);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(("Mouse", "SLR-001", "10.00", "Electronics", "d", "1"));
+
+        Func<Task> act = () => sut.ImportForStoreAsync(excel, storeId: 1);
+
+        await act.Should().ThrowAsync<ForbiddenException>();
+        db.Products.Should().BeEmpty();   // nothing imported when the caller is rejected
+    }
+
+    [Fact]
+    public async Task ImportForStore_SameSkuInAnotherStore_IsAllowed()
+    {
+        // Per-store uniqueness: a SKU used in store 2 must NOT block the same SKU in store 1.
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
+        db.Stores.Add(new Store { Id = 2, OwnerUserId = 2, Name = "Other", Slug = "other", Status = StoreStatus.Approved, CommissionRate = 0m });
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        db.Products.Add(new Product { Id = 1, Name = "Existing", Description = "d", Sku = "SHARED-1", Price = 5m, CategoryId = 1, StoreId = 2 });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(("Mouse", "SHARED-1", "10.00", "Electronics", "d", "1"));
+
+        ImportResultDto result = await sut.ImportForStoreAsync(excel, storeId: 1);
+
+        result.AddedCount.Should().Be(1);
+        result.FailedCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ImportForStore_SkuAlreadyInTargetStore_SkipsRow()
+    {
+        // A SKU already present in the TARGET store is rejected (per-store uniqueness).
+        var sut = BuildSut(out var db, out _, out _, out _, out _);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        db.Products.Add(new Product { Id = 1, Name = "Existing", Description = "d", Sku = "DUP-1", Price = 5m, CategoryId = 1, StoreId = 1 });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(("Mouse", "DUP-1", "10.00", "Electronics", "d", "1"));
+
+        ImportResultDto result = await sut.ImportForStoreAsync(excel, storeId: 1);
+
+        result.AddedCount.Should().Be(0);
+        result.FailedCount.Should().Be(1);
+        result.Errors[0].Reason.Should().Contain("already exists");
     }
 
     // TB-47: happy path — an existing product yields the AI's suggestion, and the
