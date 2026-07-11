@@ -574,4 +574,52 @@ public class ProductServiceTests
         embeddingMock.Verify(
             e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
     }
+
+    // TB-156 BUG: bulk-imported products must ALSO get a semantic-search embedding, exactly like
+    // products created one-by-one via CreateAsync. Before the fix the import path inserted rows
+    // without ever calling the embedder, so every imported product had a null Embedding and was
+    // invisible to semantic search (the reported "search doesn't find newly-added products" bug).
+    [Fact]
+    public async Task ImportExcel_ValidRows_GeneratesEmbeddingForEachProduct()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Clothing" });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(
+            ("Running Socks", "EMB-001", "12.99", "Clothing", "Breathable cushioned running socks", "5"),
+            ("Wool Beanie",   "EMB-002", "9.99",  "Clothing", "Warm winter beanie", "5")
+        );
+
+        var result = await sut.ImportAsync(excel);
+
+        result.AddedCount.Should().Be(2);
+        // Every imported product must carry an embedding so semantic search can rank it.
+        var saved = await db.Products.IgnoreQueryFilters().ToListAsync();
+        saved.Should().HaveCount(2);
+        saved.Should().OnlyContain(p => p.Embedding != null);
+        // The embedder is called once per imported product.
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task ImportForStore_ValidRows_GeneratesEmbeddingForEachProduct()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Clothing" });
+        await db.SaveChangesAsync();
+
+        var excel = BuildExcel(
+            ("Running Socks", "SEMB-001", "12.99", "Clothing", "Breathable cushioned running socks", "5")
+        );
+
+        var result = await sut.ImportForStoreAsync(excel, storeId: 1);
+
+        result.AddedCount.Should().Be(1);
+        var saved = await db.Products.IgnoreQueryFilters().SingleAsync();
+        saved.Embedding.Should().NotBeNull();
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

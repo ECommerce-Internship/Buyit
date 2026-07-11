@@ -787,9 +787,35 @@ public class ProductService : IProductService
 
         await SaveImportedProductsAsync(productsToAdd);
 
+        // TB-156: generate a semantic-search embedding for every imported product, exactly like
+        // CreateAsync/UpdateAsync do for single products. Without this an imported product's
+        // Embedding stays null and it is invisible to semantic search (SearchSemanticAsync filters
+        // on Embedding != null). Best-effort per product — a Gemini outage leaves that one product's
+        // vector null (the backfill endpoint fills it later) without failing the whole import.
+        await EmbedImportedProductsAsync(productsToAdd, categoriesByName);
+
         result.AddedCount = productsToAdd.Count;
         result.FailedCount = result.Errors.Count;
         return result;
+    }
+
+    // Embeds each freshly-inserted product (best-effort, one call per product — same contract as
+    // TryUpdateEmbeddingAsync). Rebuilds the id -> name category lookup from the name -> id map the
+    // import already loaded, so no extra DB round-trip is needed to get each product's category name.
+    private async Task EmbedImportedProductsAsync(List<Product> products, Dictionary<string, int> categoriesByName)
+    {
+        if (products.Count == 0)
+            return;
+
+        var nameByCategoryId = new Dictionary<int, string>();
+        foreach (var kvp in categoriesByName)
+            nameByCategoryId[kvp.Value] = kvp.Key;
+
+        foreach (var product in products)
+        {
+            var categoryName = nameByCategoryId.GetValueOrDefault(product.CategoryId, string.Empty);
+            await TryUpdateEmbeddingAsync(product, categoryName);
+        }
     }
 
     // Case-INSENSITIVE Category Name -> Id lookup. Uses the indexer (not Add) so duplicate category
