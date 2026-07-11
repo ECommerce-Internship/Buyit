@@ -46,7 +46,7 @@ public class ProductOwnershipTests
         // TB-156: embedder mocked with a valid 768-vector so best-effort embedding on create/update
         // succeeds silently; ownership tests don't assert on embeddings.
         var embeddings = new Mock<IEmbeddingService>();
-        embeddings.Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        embeddings.Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new float[768]);
 
         return new ProductService(

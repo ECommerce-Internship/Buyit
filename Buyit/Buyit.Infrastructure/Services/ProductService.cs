@@ -539,7 +539,7 @@ public class ProductService : IProductService
         var text = $"{product.Name}\n{product.Description}\n{categoryName}";
         try
         {
-            var vector = await _embeddings.EmbedAsync(text);
+            var vector = await _embeddings.EmbedAsync(text, EmbeddingTaskType.RetrievalDocument);
             product.Embedding = new Pgvector.Vector(vector);
             await _db.SaveChangesAsync();
         }
@@ -560,8 +560,10 @@ public class ProductService : IProductService
             });
         take = Math.Clamp(take, 1, 50);
 
-        // 2) Embed the QUERY. A failure here is fatal for search (no fallback) -> propagates as 502.
-        var queryVector = new Pgvector.Vector(await _embeddings.EmbedAsync(query, cancellationToken));
+        // 2) Embed the QUERY (as a RETRIEVAL_QUERY, so it matches products embedded as documents).
+        //    A failure here is fatal for search (no fallback) -> propagates as 502.
+        var queryVector = new Pgvector.Vector(
+            await _embeddings.EmbedAsync(query, EmbeddingTaskType.RetrievalQuery, cancellationToken));
 
         // 3) Rank in the DATABASE using cosine distance (<=>). Only APPROVED stores are public,
         //    and only products that actually have an embedding can be ranked. Smaller = closer.
@@ -613,9 +615,27 @@ public class ProductService : IProductService
     private const int MaxBackfillBatch = 500;
 
     public async Task<BackfillEmbeddingsResponse> BackfillEmbeddingsAsync(
-        int batchSize = 100, CancellationToken cancellationToken = default)
+        int batchSize = 100, bool force = false, CancellationToken cancellationToken = default)
     {
         batchSize = Math.Clamp(batchSize, 1, MaxBackfillBatch);
+
+        // One-time REGENERATION: when the embedding recipe changes (e.g. adding the retrieval
+        // taskType), the stored vectors are stale. `force` nulls EVERY current embedding so the
+        // standard "embed the null ones" pass below rebuilds them with the new recipe. Call once
+        // with force=true; if the catalogue is larger than batchSize, keep calling WITHOUT force
+        // until Remaining == 0. Uses tracked entities (works on the in-memory test provider too).
+        if (force)
+        {
+            var toReset = await _db.Products
+                .Where(p => p.Embedding != null)
+                .ToListAsync(cancellationToken);
+            foreach (var p in toReset)
+                p.Embedding = null;
+            if (toReset.Count > 0)
+                await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Backfill(force): cleared {Count} existing embedding(s) for regeneration.", toReset.Count);
+        }
 
         // Only products missing an embedding, capped at batchSize so the request is bounded.
         // The soft-delete global filter already excludes deleted products (not searchable anyway).
@@ -633,7 +653,8 @@ public class ProductService : IProductService
             try
             {
                 var text = $"{product.Name}\n{product.Description}\n{product.Category.Name}";
-                product.Embedding = new Pgvector.Vector(await _embeddings.EmbedAsync(text, cancellationToken));
+                product.Embedding = new Pgvector.Vector(
+                    await _embeddings.EmbedAsync(text, EmbeddingTaskType.RetrievalDocument, cancellationToken));
                 await _db.SaveChangesAsync(cancellationToken);
                 embedded++;
                 await Task.Delay(200, cancellationToken);   // gentle throttle to stay under the rate limit
