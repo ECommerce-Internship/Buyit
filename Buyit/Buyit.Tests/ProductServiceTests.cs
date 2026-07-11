@@ -94,7 +94,7 @@ public class ProductServiceTests
         // embed best-effort) succeed silently; tests that care override this via the out param.
         embeddingMock = new Mock<IEmbeddingService>();
         embeddingMock
-            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new float[768]);
 
         // Semantic relevance cutoff comes from GeminiSettings; the default is fine for these tests
@@ -519,7 +519,7 @@ public class ProductServiceTests
         var sut = BuildSut(out _, out _, out _, out _, out var embeddingMock);
         // Override the default: the embedding client is down -> 502-style failure.
         embeddingMock
-            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ExternalServiceException("The AI embedding service is unavailable."));
 
         Func<Task> act = async () => await sut.SearchSemanticAsync("coffee mug", 10);
@@ -537,7 +537,7 @@ public class ProductServiceTests
         await db.SaveChangesAsync();
         // Override the default: embedding is down.
         embeddingMock
-            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ExternalServiceException("The AI embedding service is unavailable."));
 
         var request = new CreateProductRequest
@@ -579,7 +579,7 @@ public class ProductServiceTests
         result.Failed.Should().Be(0);
         result.Remaining.Should().Be(0);
         embeddingMock.Verify(
-            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
     }
 
     // TB-156 BUG: bulk-imported products must ALSO get a semantic-search embedding, exactly like
@@ -607,7 +607,7 @@ public class ProductServiceTests
         saved.Should().OnlyContain(p => p.Embedding != null);
         // The embedder is called once per imported product.
         embeddingMock.Verify(
-            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -627,6 +627,86 @@ public class ProductServiceTests
         var saved = await db.Products.IgnoreQueryFilters().SingleAsync();
         saved.Embedding.Should().NotBeNull();
         embeddingMock.Verify(
-            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // --- Asymmetric retrieval: stored products embed as DOCUMENT, the search query as QUERY. ---
+
+    [Fact]
+    public async Task CreateProduct_EmbedsTextAsRetrievalDocument()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        await db.SaveChangesAsync();
+
+        var request = new CreateProductRequest
+        {
+            Name = "Wireless Mouse", Description = "Ergonomic mouse", Sku = "DOC-1",
+            Price = 24.99m, CategoryId = 1, StoreId = 1, InitialStock = 5
+        };
+
+        await sut.CreateAsync(request);
+
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), EmbeddingTaskType.RetrievalDocument, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SearchSemantic_EmbedsQueryAsRetrievalQuery()
+    {
+        var sut = BuildSut(out _, out _, out _, out _, out var embeddingMock);
+        // Only a RETRIEVAL_QUERY embedding throws. If the query were embedded any other way the call
+        // would instead reach the (in-memory-untranslatable) pgvector ranking query and fail with a
+        // different exception — so ExternalServiceException here proves the query used RetrievalQuery.
+        embeddingMock
+            .Setup(e => e.EmbedAsync(It.IsAny<string>(), EmbeddingTaskType.RetrievalQuery, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ExternalServiceException("query embed"));
+
+        Func<Task> act = () => sut.SearchSemanticAsync("keep me cool in summer", 10);
+
+        await act.Should().ThrowAsync<ExternalServiceException>();
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), EmbeddingTaskType.RetrievalQuery, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // --- force: regenerate EVERY embedding (used after changing the embedding recipe). ---
+
+    [Fact]
+    public async Task BackfillEmbeddings_Force_RegeneratesExistingEmbeddings()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "A", Description = "a", Sku = "A-1", Price = 1m, CategoryId = 1, StoreId = 1, Embedding = new Pgvector.Vector(new float[768]) },
+            new Product { Id = 2, Name = "B", Description = "b", Sku = "B-1", Price = 2m, CategoryId = 1, StoreId = 1, Embedding = new Pgvector.Vector(new float[768]) });
+        await db.SaveChangesAsync();
+
+        // Without force these would be skipped (they already have embeddings); force re-embeds BOTH.
+        var result = await sut.BackfillEmbeddingsAsync(batchSize: 100, force: true);
+
+        result.Embedded.Should().Be(2);
+        result.Remaining.Should().Be(0);
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), EmbeddingTaskType.RetrievalDocument, It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task BackfillEmbeddings_NoForce_SkipsAlreadyEmbeddedProducts()
+    {
+        var sut = BuildSut(out var db, out _, out _, out _, out var embeddingMock);
+        db.Categories.Add(new Category { Id = 1, Name = "Electronics" });
+        db.Products.Add(new Product { Id = 1, Name = "A", Description = "a", Sku = "A-1", Price = 1m, CategoryId = 1, StoreId = 1, Embedding = new Pgvector.Vector(new float[768]) });
+        await db.SaveChangesAsync();
+
+        var result = await sut.BackfillEmbeddingsAsync(batchSize: 100);   // force defaults to false
+
+        result.Embedded.Should().Be(0);
+        result.Remaining.Should().Be(0);
+        embeddingMock.Verify(
+            e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<EmbeddingTaskType>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }
