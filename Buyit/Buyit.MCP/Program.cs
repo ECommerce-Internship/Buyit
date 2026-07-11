@@ -53,7 +53,6 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
-builder.Services.Configure<SendGridSettings>(builder.Configuration.GetSection("SendGrid"));
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
 
 // Validators
