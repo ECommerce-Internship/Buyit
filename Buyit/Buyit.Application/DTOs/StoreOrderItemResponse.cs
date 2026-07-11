@@ -5,6 +5,7 @@ public record StoreOrderItemResponse(
     int StoreOrderItemId,
     int ProductId,
     string ProductName,
+    string? ImageUrl,
     decimal UnitPrice,
     int Quantity,
     decimal LineTotal);
