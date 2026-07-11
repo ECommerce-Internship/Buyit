@@ -21,12 +21,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
 using OfficeOpenXml;
+using Resend;
 using Serilog;
 using StackExchange.Redis;
 
 
 // Bootstrap logger — captures startup errors before the host config is loaded
-Log.Logger = new LoggerConfiguration()
+Serilog.Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
     .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
@@ -123,14 +124,18 @@ builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequ
 builder.Services.AddScoped<IReviewService, ReviewService>();
 builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
 
-// Register email service — priority: SendGrid (prod) > Ethereal (dev) > placeholder (no config)
+// Register email service — priority: Resend (prod) > Ethereal (dev) > placeholder (no config)
+// Resend sends over HTTPS (its API), not raw SMTP, so it isn't blocked by Render's outbound
+// SMTP port restrictions the way Ethereal/Gmail SMTP is.
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
-
-var sendGridApiKey = builder.Configuration["SendGrid:ApiKey"];
+builder.Services.Configure<ResendSettings>(builder.Configuration.GetSection("Resend"));
+var resendApiKey = builder.Configuration["Resend:ApiKey"];
 var etherealUsername = builder.Configuration["Ethereal:Username"];
-
-if (!string.IsNullOrWhiteSpace(sendGridApiKey))
-    builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+if (!string.IsNullOrWhiteSpace(resendApiKey))
+{
+    builder.Services.AddResend(o => { o.ApiToken = resendApiKey; });
+    builder.Services.AddScoped<IEmailService, ResendEmailService>();
+}
 else if (!string.IsNullOrWhiteSpace(etherealUsername))
     builder.Services.AddScoped<IEmailService, EtherealEmailService>();
 else
@@ -148,11 +153,9 @@ builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<IConversationStore, RedisConversationStore>();
 
-// --- TB-43: Azure Queue + SendGrid registrations ---
+// --- TB-43: Azure Queue registrations ---
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
-builder.Services.Configure<SendGridSettings>(builder.Configuration.GetSection("SendGrid"));
 builder.Services.AddHostedService<LowStockWorker>();
-
 // --- TB-46: Gemini AI product-content feature registrations ---
 builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
 
@@ -407,9 +410,9 @@ try
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "Application terminated unexpectedly");
+    Serilog.Log.Fatal(ex, "Application terminated unexpectedly");
 }
 finally
 {
-    Log.CloseAndFlush();    // ensures all buffered logs are sent to Seq before exit
+    Serilog.Log.CloseAndFlush();    // ensures all buffered logs are sent to Seq before exit
 }
