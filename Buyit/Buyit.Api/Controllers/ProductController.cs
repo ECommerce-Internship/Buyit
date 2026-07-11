@@ -151,29 +151,57 @@ public class ProductController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ImportResultDto>> Import(IFormFile file)
     {
-        // 1) There must actually be a file with content.
-        if (file is null || file.Length == 0)
-            return BadRequest("No file was uploaded.");
+        var error = ValidateXlsxUpload(file);
+        if (error is not null) return error;
 
-        // 2) Only modern Excel files (.xlsx) are accepted. Compare lower-cased to ignore case.
-        //    "?? string.Empty" guards the rare case where the upload has no file name at all.
-        var extension = Path.GetExtension(file.FileName ?? string.Empty).ToLowerInvariant();
-        if (extension != ".xlsx")
-            return BadRequest("Only .xlsx files are allowed.");
-
-        // 3) Size limit: 10 MB. 10 * 1024 * 1024 bytes = 10 megabytes.
-        const long maxBytes = 10L * 1024 * 1024;
-        if (file.Length > maxBytes)
-            return BadRequest("File must be 10 MB or smaller.");
-
-        // 4) Copy the upload into a rewindable MemoryStream so EPPlus can read it cleanly.
         using var memory = new MemoryStream();
         await file.CopyToAsync(memory);
         memory.Position = 0;   // rewind to the start before reading
 
-        // 5) Hand the stream to the service and return its summary.
         var result = await _products.ImportAsync(memory);
         return Ok(result);
+    }
+
+    /// <summary>Bulk-import products into ONE store from an .xlsx file. Seller (own store) or Admin.</summary>
+    [HttpPost("import/{storeId:int}")]
+    [Authorize(Roles = "Seller,Admin")]
+    [ProducesResponseType(typeof(ImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ImportResultDto>> ImportForStore(int storeId, IFormFile file)
+    {
+        var error = ValidateXlsxUpload(file);
+        if (error is not null) return error;
+
+        using var memory = new MemoryStream();
+        await file.CopyToAsync(memory);
+        memory.Position = 0;
+
+        // Store ownership (a seller may only target a store they own; an admin may target any) is
+        // enforced inside the service, which throws ForbiddenException (403) on a mismatch.
+        var result = await _products.ImportForStoreAsync(memory, storeId);
+        return Ok(result);
+    }
+
+    // Rejects an upload that isn't a present, <= 10 MB .xlsx file — returning the 400 to send back —
+    // or returns null when the file is acceptable. Shared by Import and ImportForStore.
+    private ActionResult? ValidateXlsxUpload(IFormFile file)
+    {
+        // There must actually be a file with content.
+        if (file is null || file.Length == 0)
+            return BadRequest("No file was uploaded.");
+
+        // Only modern Excel files (.xlsx) are accepted. "?? string.Empty" guards a nameless upload.
+        var extension = Path.GetExtension(file.FileName ?? string.Empty).ToLowerInvariant();
+        if (extension != ".xlsx")
+            return BadRequest("Only .xlsx files are allowed.");
+
+        // Size limit: 10 MB.
+        const long maxBytes = 10L * 1024 * 1024;
+        if (file.Length > maxBytes)
+            return BadRequest("File must be 10 MB or smaller.");
+
+        return null;
     }
 
     /// <summary>Upload (or replace) a product's image. Admin only. multipart/form-data.</summary>
