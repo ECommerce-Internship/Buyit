@@ -56,16 +56,19 @@ public class ProductController : ControllerBase
     /// <summary>
     /// Backfill embeddings for products that don't have one yet (e.g. rows created before TB-156).
     /// Admin only. Bounded to <paramref name="batchSize"/> products per call and re-runnable/idempotent —
-    /// re-run until the response's <c>remaining</c> is 0.
+    /// re-run until the response's <c>remaining</c> is 0. Pass <paramref name="force"/>=true once to
+    /// null and REGENERATE every existing embedding (use after changing the embedding recipe, e.g. the
+    /// retrieval taskType); then keep calling without force until <c>remaining</c> is 0.
     /// </summary>
     [HttpPost("embeddings/backfill")]
     [Authorize(Roles = "Admin")]
     [ProducesResponseType(typeof(BackfillEmbeddingsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<BackfillEmbeddingsResponse>> BackfillEmbeddings([FromQuery] int batchSize = 100)
+    public async Task<ActionResult<BackfillEmbeddingsResponse>> BackfillEmbeddings(
+        [FromQuery] int batchSize = 100, [FromQuery] bool force = false)
     {
-        var result = await _products.BackfillEmbeddingsAsync(batchSize, HttpContext.RequestAborted);
+        var result = await _products.BackfillEmbeddingsAsync(batchSize, force, HttpContext.RequestAborted);
         return Ok(result);
     }
 

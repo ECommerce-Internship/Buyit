@@ -31,7 +31,10 @@ public class EmbeddingService : IEmbeddingService
         _logger = logger;
     }
 
-    public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
+    public async Task<float[]> EmbedAsync(
+        string text,
+        EmbeddingTaskType taskType = EmbeddingTaskType.RetrievalDocument,
+        CancellationToken cancellationToken = default)
     {
         // 0) Guard: never send an empty body to the API — that's a wasted call that 400s.
         if (string.IsNullOrWhiteSpace(text))
@@ -41,10 +44,16 @@ public class EmbeddingService : IEmbeddingService
         //    gemini-embedding-001 defaults to 3072-dim output; pin it to ExpectedDimensions (768)
         //    so the vector matches our vector(768) column. (text-embedding-004 was natively 768 but
         //    is no longer available on this API key — ListModels confirmed only gemini-embedding-*.)
+        //    taskType makes retrieval ASYMMETRIC (documents vs queries), which sharply improves the
+        //    separation between relevant and irrelevant products versus the untyped default.
+        var taskTypeValue = taskType == EmbeddingTaskType.RetrievalQuery
+            ? "RETRIEVAL_QUERY"
+            : "RETRIEVAL_DOCUMENT";
         var requestBody = new
         {
             model = $"models/{_settings.EmbeddingModel}",
             content = new { parts = new[] { new { text } } },
+            taskType = taskTypeValue,
             outputDimensionality = ExpectedDimensions
         };
 

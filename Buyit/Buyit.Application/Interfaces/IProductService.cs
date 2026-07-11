@@ -58,7 +58,9 @@ public interface IProductService
 
     // TB-156: embed products that have no embedding yet, capped at batchSize per call so the
     // request stays bounded. Re-runnable (idempotent): already-embedded products are skipped.
+    // `force` first nulls EVERY existing embedding so they are ALL regenerated with the current
+    // recipe (use after changing how embeddings are produced, e.g. the retrieval taskType).
     // Returns the counts embedded/failed and how many products are still pending (re-run until 0).
     Task<BackfillEmbeddingsResponse> BackfillEmbeddingsAsync(
-        int batchSize = 100, CancellationToken cancellationToken = default);
+        int batchSize = 100, bool force = false, CancellationToken cancellationToken = default);
 }
