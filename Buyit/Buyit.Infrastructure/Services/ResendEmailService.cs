@@ -1,23 +1,28 @@
+﻿using System.Net.Mail;
 using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using SendGrid;
-using SendGrid.Helpers.Mail;
+using Resend;
 
 namespace Buyit.Infrastructure.Services;
 
-// Real SendGrid implementation — used when ApiKey is configured
-public class SendGridEmailService : IEmailService
+// Real Resend implementation — used when ApiKey is configured. Resend sends over its HTTPS
+// API (not raw SMTP), so unlike EtherealEmailService this isn't blocked by Render's outbound
+// SMTP port restrictions.
+public class ResendEmailService : IEmailService
 {
-    private readonly SendGridSettings _settings;
-    private readonly ILogger<SendGridEmailService> _logger;
+    private readonly IResend _resend;
+    private readonly ResendSettings _settings;
+    private readonly ILogger<ResendEmailService> _logger;
 
-    public SendGridEmailService(
-        IOptions<SendGridSettings> settings,
-        ILogger<SendGridEmailService> logger)
+    public ResendEmailService(
+        IResend resend,
+        IOptions<ResendSettings> settings,
+        ILogger<ResendEmailService> logger)
     {
+        _resend = resend;
         _settings = settings.Value;
         _logger = logger;
     }
@@ -53,30 +58,6 @@ public class SendGridEmailService : IEmailService
         await SendAsync(recipientEmail, subject, html);
     }
 
-    private async Task SendAsync(string toEmail, string subject, string htmlContent)
-    {
-        try
-        {
-            var client = new SendGridClient(_settings.ApiKey);
-            var from = new EmailAddress(_settings.FromEmail, _settings.FromName);
-            var to = new EmailAddress(toEmail);
-            var plainText = System.Text.RegularExpressions.Regex.Replace(htmlContent, "<.*?>", string.Empty);
-            var msg = MailHelper.CreateSingleEmail(from, to, subject, plainText, htmlContent);
-
-            var response = await client.SendEmailAsync(msg);
-
-            if (response.IsSuccessStatusCode)
-                _logger.LogInformation("Email sent to {Email} — Subject: {Subject}", toEmail, subject);
-            else
-                _logger.LogWarning("SendGrid returned {StatusCode} for email to {Email}", response.StatusCode, toEmail);
-        }
-        catch (Exception ex)
-        {
-            // Fail-open: email failure must never crash the worker or the order flow
-            _logger.LogError(ex, "Failed to send email to {Email} — Subject: {Subject}", toEmail, subject);
-        }
-    }
-
     public async Task SendPasswordResetCodeAsync(string recipientEmail, string code)
     {
         var subject = "Reset your Buyit password";
@@ -90,5 +71,28 @@ public class SendGridEmailService : IEmailService
             """;
 
         await SendAsync(recipientEmail, subject, html);
+    }
+
+    private async Task SendAsync(string toEmail, string subject, string htmlContent)
+    {
+        try
+        {
+            var message = new EmailMessage
+            {
+                From = $"{_settings.FromName} <{_settings.FromEmail}>",
+                Subject = subject,
+                HtmlBody = htmlContent
+            };
+            message.To.Add(toEmail);
+
+            await _resend.EmailSendAsync(message);
+
+            _logger.LogInformation("Email sent to {Email} — Subject: {Subject}", toEmail, subject);
+        }
+        catch (Exception ex)
+        {
+            // Fail-open: email failure must never crash the worker or the order flow
+            _logger.LogError(ex, "Failed to send email to {Email} — Subject: {Subject}", toEmail, subject);
+        }
     }
 }
