@@ -26,18 +26,22 @@ public class SftpImportService : ISftpImportService
 
     public async Task<ImportResultDto> ImportFromSftpAsync()
     {
-        // Use 'using' to guarantee the SFTP connection is always closed and disposed
-        using var client = new SftpClient(_settings.Host, _settings.Port, _settings.Username, _settings.Password);
+        SftpClient? client = null;
 
         try
         {
+            // Construction can itself throw (e.g. empty/missing Host or Username when the
+            // Sftp:* config isn't set) — this must be inside the try too, otherwise a missing-
+            // config problem surfaces as a raw 500 instead of a clean 502.
+            client = new SftpClient(_settings.Host, _settings.Port, _settings.Username, _settings.Password);
             client.Connect();
             _logger.LogInformation("Connected to SFTP server at {Host}:{Port}", _settings.Host, _settings.Port);
         }
         catch (Exception ex)
         {
-            // Connection failed — throw so controller can return 502
+            // Connection failed (or client construction failed) — throw so controller can return 502
             _logger.LogError(ex, "Failed to connect to SFTP server at {Host}:{Port}", _settings.Host, _settings.Port);
+            client?.Dispose();
             throw new SftpConnectionException($"Could not connect to SFTP server at {_settings.Host}:{_settings.Port}. {ex.Message}");
         }
 
@@ -76,9 +80,10 @@ public class SftpImportService : ISftpImportService
         }
         finally
         {
-            // Always disconnect cleanly
+            // Always disconnect and dispose cleanly
             if (client.IsConnected)
                 client.Disconnect();
+            client.Dispose();
         }
     }
 }
