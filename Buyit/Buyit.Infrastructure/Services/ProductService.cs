@@ -1,4 +1,5 @@
-﻿using Buyit.Application.DTOs;
+﻿using Buyit.Application.Common;
+using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Microsoft.AspNetCore.Http;   // IFormFile (TB-42)
 using Buyit.Domain.Entities;
@@ -8,6 +9,7 @@ using Buyit.Infrastructure.Data;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Pgvector.EntityFrameworkCore;   // TB-156: CosineDistance() -> Postgres "<=>" translation
 using OfficeOpenXml;
 using System.Globalization;
@@ -31,6 +33,7 @@ public class ProductService : IProductService
     private readonly IGeminiService _gemini;                              // TB-47: AI content generator
     private readonly IValidator<GenerateContentRequest> _generateContentValidator;  // TB-47
     private readonly IEmbeddingService _embeddings;                       // TB-156: semantic-search embeddings
+    private readonly double _semanticMaxDistance;                         // relevance cutoff for semantic search
 
     public ProductService(
      AppDbContext db,
@@ -42,6 +45,7 @@ public class ProductService : IProductService
      IGeminiService gemini,                                          // <-- new (TB-47)
      IValidator<GenerateContentRequest> generateContentValidator,    // <-- new (TB-47)
      IEmbeddingService embeddings,                                   // <-- new (TB-156)
+     IOptions<GeminiSettings> geminiSettings,                        // <-- new (semantic relevance cutoff)
      ILogger<ProductService> logger)
     {
         _db = db;
@@ -54,6 +58,7 @@ public class ProductService : IProductService
         _gemini = gemini;                                           // <-- new (TB-47)
         _generateContentValidator = generateContentValidator;      // <-- new (TB-47)
         _embeddings = embeddings;                                   // <-- new (TB-156)
+        _semanticMaxDistance = geminiSettings.Value.SemanticMaxDistance;
     }
 
     // TB-125: throws 403 unless the caller is an admin or owns the given store.
@@ -589,6 +594,10 @@ public class ProductService : IProductService
                 },
                 Distance = p.Embedding!.CosineDistance(queryVector)
             })
+            // Relevance cutoff: drop products whose meaning is too far from the query, so a vague
+            // search doesn't return the whole catalogue re-ranked. A configured value <= 0 disables
+            // the filter (rank-only). The comparison is inlined into SQL by pgvector.
+            .Where(x => _semanticMaxDistance <= 0 || x.Distance <= _semanticMaxDistance)
             .OrderBy(x => x.Distance)
             .Take(take)
             .ToListAsync(cancellationToken);

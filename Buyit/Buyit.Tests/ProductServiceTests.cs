@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using FluentValidation;
 using FluentValidation.Results;
 using OfficeOpenXml;
+using Buyit.Application.Common;
 using Buyit.Application.DTOs;
 using Buyit.Application.Interfaces;
 using Buyit.Domain.Entities;
@@ -13,6 +14,7 @@ using Buyit.Domain.Exceptions;
 using Buyit.Infrastructure.Data;
 using Buyit.Infrastructure.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Buyit.Tests;
 
@@ -95,6 +97,10 @@ public class ProductServiceTests
             .Setup(e => e.EmbedAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new float[768]);
 
+        // Semantic relevance cutoff comes from GeminiSettings; the default is fine for these tests
+        // (the CosineDistance ranking/threshold runs only in Postgres, not the in-memory provider).
+        var geminiSettings = Options.Create(new GeminiSettings());
+
         return new ProductService(
             db,
             createValidatorMock.Object,
@@ -105,6 +111,7 @@ public class ProductServiceTests
             geminiMock.Object,
             generateContentValidatorMock.Object,
             embeddingMock.Object,
+            geminiSettings,
             loggerMock.Object);
     }
 
