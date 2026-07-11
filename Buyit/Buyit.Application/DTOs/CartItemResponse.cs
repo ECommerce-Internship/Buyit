@@ -6,6 +6,7 @@ public record CartItemResponse(
     int ProductId,
     string ProductName,
     string Sku,
+    string? ImageUrl,
     decimal UnitPrice,
     int Quantity,
     decimal LineTotal,

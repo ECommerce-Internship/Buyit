@@ -356,7 +356,7 @@ public class OrderService : IOrderService
                 so.Id, so.Order.Id, so.Order.OrderDate, so.StoreId, so.Store.Name, so.Status.ToString(),
                 so.SubTotal, so.CommissionAmount, so.SellerNetAmount,
                 so.StoreOrderItems.Select(i => new StoreOrderItemResponse(
-                    i.Id, i.ProductId, i.ProductNameSnapshot, i.UnitPrice, i.Quantity, i.Subtotal))))
+                    i.Id, i.ProductId, i.ProductNameSnapshot, i.Product.ImageUrl, i.UnitPrice, i.Quantity, i.Subtotal))))
             .ToListAsync();
 
         return new PaginatedResult<StoreOrderResponse>
@@ -474,7 +474,7 @@ public class OrderService : IOrderService
         _context.Orders
             .Include(o => o.Payment)
             .Include(o => o.StoreOrders).ThenInclude(so => so.Store)
-            .Include(o => o.StoreOrders).ThenInclude(so => so.StoreOrderItems)
+            .Include(o => o.StoreOrders).ThenInclude(so => so.StoreOrderItems).ThenInclude(soi => soi.Product)
             .FirstOrDefaultAsync(o => o.Id == orderId);
 
     private async Task<OrderResponse> BuildOrderResponseAsync(int orderId)
@@ -498,7 +498,7 @@ public class OrderService : IOrderService
             so.Id, order.Id, order.OrderDate, so.StoreId, so.Store?.Name ?? string.Empty, so.Status.ToString(),
             so.SubTotal, so.CommissionAmount, so.SellerNetAmount,
             so.StoreOrderItems.Select(i => new StoreOrderItemResponse(
-                i.Id, i.ProductId, i.ProductNameSnapshot, i.UnitPrice, i.Quantity, i.Subtotal))))
+                i.Id, i.ProductId, i.ProductNameSnapshot, i.Product?.ImageUrl, i.UnitPrice, i.Quantity, i.Subtotal))))
         );
 
     // M2: clamp paging so a caller can't request an unbounded page (resource-exhaustion DoS).

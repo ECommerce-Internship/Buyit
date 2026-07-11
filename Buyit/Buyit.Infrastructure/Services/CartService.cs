@@ -244,6 +244,7 @@ public class CartService : ICartService
             ci.ProductId,
             ci.Product.Name,
             ci.Product.Sku,
+            ci.Product.ImageUrl,
             ci.Product.Price,
             ci.Quantity,
             ci.Product.Price * ci.Quantity,
