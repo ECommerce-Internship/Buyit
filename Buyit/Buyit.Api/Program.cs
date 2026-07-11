@@ -124,14 +124,20 @@ builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentRequ
 builder.Services.AddScoped<IReviewService, ReviewService>();
 builder.Services.AddScoped<IValidator<SubmitReviewRequest>, SubmitReviewRequestValidator>();
 
-// Register email service — priority: Resend (prod) > Ethereal (dev) > placeholder (no config)
-// Resend sends over HTTPS (its API), not raw SMTP, so it isn't blocked by Render's outbound
-// SMTP port restrictions the way Ethereal/Gmail SMTP is.
+// Register email service — priority: Gmail API (prod) > Resend (fallback) > Ethereal (dev) > placeholder
+// Gmail API and Resend both send over HTTPS, not raw SMTP, so neither is blocked by Render's
+// outbound SMTP port restrictions the way Ethereal/Gmail SMTP is.
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
 builder.Services.Configure<ResendSettings>(builder.Configuration.GetSection("Resend"));
+builder.Services.Configure<GmailApiSettings>(builder.Configuration.GetSection("GmailApi"));
+var gmailApiRefreshToken = builder.Configuration["GmailApi:RefreshToken"];
 var resendApiKey = builder.Configuration["Resend:ApiKey"];
 var etherealUsername = builder.Configuration["Ethereal:Username"];
-if (!string.IsNullOrWhiteSpace(resendApiKey))
+if (!string.IsNullOrWhiteSpace(gmailApiRefreshToken))
+{
+    builder.Services.AddScoped<IEmailService, GmailApiEmailService>();
+}
+else if (!string.IsNullOrWhiteSpace(resendApiKey))
 {
     builder.Services.AddResend(o => { o.ApiToken = resendApiKey; });
     builder.Services.AddScoped<IEmailService, ResendEmailService>();
