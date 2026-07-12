@@ -517,7 +517,8 @@ public class ProductService : IProductService
             .FirstOrDefaultAsync(p => p.Id == id);
         if (product is null)
             throw new NotFoundException($"Product with id {id} was not found.");
-
+        // Ownership (TB-125): only the owning seller (or an admin) may generate content for this product.
+        await EnsureCanManageStoreAsync(product.StoreId);
         // 3) Ask the AI service to draft content, feeding values FROM the product row.
         var content = await _gemini.GenerateProductContentAsync(
             product.Name,

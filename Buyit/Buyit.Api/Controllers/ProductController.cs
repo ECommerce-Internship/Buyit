@@ -122,7 +122,7 @@ public class ProductController : ControllerBase
     /// before creation), where the caller must supply the name and category explicitly.
     /// </remarks>
     [HttpPost("{id:int}/generate-content")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,Seller")]
     [ProducesResponseType(typeof(ProductContentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
