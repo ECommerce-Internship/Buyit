@@ -52,6 +52,7 @@ builder.Services.AddHttpClient("GeminiClient", client =>
 // Settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.Configure<GeminiSettings>(builder.Configuration.GetSection("Gemini"));
+builder.Services.Configure<DocumentationSettings>(builder.Configuration.GetSection("Documentation"));
 builder.Services.Configure<AzureQueueSettings>(builder.Configuration.GetSection("AzureQueue"));
 builder.Services.Configure<EtherealSettings>(builder.Configuration.GetSection("Ethereal"));
 
@@ -77,6 +78,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, McpCurrentUserService>();
 builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();   // TB-156: ProductService depends on it for semantic search
+builder.Services.AddScoped<IDocumentationService, DocumentationService>();   // RAG: feature-docs retrieval for the assistant
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<IOrderService, OrderService>();

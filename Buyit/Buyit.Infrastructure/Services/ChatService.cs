@@ -28,7 +28,10 @@ public class ChatService : IChatService
         "check the catalogue: a product is IN STOCK when its quantityInStock is greater than 0, " +
         "and only say a product is unavailable after a search actually returns no results. " +
         "You can manage the cart with add_to_cart, update_cart_item, remove_from_cart, clear_cart, " +
-        "apply_coupon and remove_coupon, and place an order with checkout. Checkout needs a full " +
+        "apply_coupon and remove_coupon, and place an order with checkout. When the user asks how Buyit " +
+        "or one of its features works (e.g. checkout, coupons, returns, seller sign-up), use " +
+        "search_documentation and answer ONLY from the passages it returns; if they don't cover it, say " +
+        "you don't have that information rather than guessing. Checkout needs a full " +
         "shipping address (line 1, city, state, postal code and country); ask the user for any missing " +
         "address fields before calling it. IMPORTANT: always confirm with the user — restating exactly " +
         "what will happen — BEFORE you checkout, clear the cart, or remove an item; adding items or " +
@@ -42,6 +45,8 @@ public class ChatService : IChatService
     {
         "search_products",       // public catalogue search — safe
         "get_product",           // single product details — safe
+        "search_documentation",  // RAG over Buyit's own feature docs — public, read-only
+
         "get_customer_orders",   // legacy self-scoped orders (kept; get_my_orders is preferred)
         "get_my_orders",         // TB-100: self-scoped order history (no userId param)
         "add_to_cart",           // TB-100: adds to the caller's own cart
