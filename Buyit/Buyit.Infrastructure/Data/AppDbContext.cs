@@ -28,6 +28,7 @@ namespace Buyit.Infrastructure.Data
         public DbSet<Store> Stores => Set<Store>();
         public DbSet<StoreOrder> StoreOrders => Set<StoreOrder>();
         public DbSet<StoreOrderItem> StoreOrderItems => Set<StoreOrderItem>();
+        public DbSet<DocChunk> DocChunks => Set<DocChunk>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -273,6 +274,29 @@ namespace Buyit.Infrastructure.Data
                 // Production always takes the Npgsql branch above; this path is test-only.
                 modelBuilder.Entity<Product>()
                     .Property(p => p.Embedding)
+                    .HasConversion(
+                        v => v == null
+                            ? null
+                            : string.Join(';', v.ToArray().Select(f => f.ToString(CultureInfo.InvariantCulture))),
+                        s => string.IsNullOrEmpty(s)
+                            ? null
+                            : new Vector(s.Split(';').Select(x => float.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
+            }
+
+            // ========== RAG: DOCUMENTATION EMBEDDING ==========
+            // The DocChunk corpus uses the SAME 768-dim pgvector column + test-provider fallback as
+            // Product.Embedding above (see that block for why the two branches exist). Kept as its own
+            // block so the mapping lives next to the entity it configures.
+            if (Database.IsNpgsql())
+            {
+                modelBuilder.Entity<DocChunk>()
+                    .Property(c => c.Embedding)
+                    .HasColumnType("vector(768)");
+            }
+            else
+            {
+                modelBuilder.Entity<DocChunk>()
+                    .Property(c => c.Embedding)
                     .HasConversion(
                         v => v == null
                             ? null

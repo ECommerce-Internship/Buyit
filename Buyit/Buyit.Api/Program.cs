@@ -175,6 +175,9 @@ builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 // TB-156: semantic-search embedding client (reuses the "GeminiClient" HttpClient above).
 builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
+// RAG: feature-documentation corpus for the chat assistant (ingest endpoint + retrieval via MCP).
+builder.Services.Configure<DocumentationSettings>(builder.Configuration.GetSection("Documentation"));
+builder.Services.AddScoped<IDocumentationService, DocumentationService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
