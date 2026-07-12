@@ -169,6 +169,10 @@ builder.Services.AddScoped<IGeminiService, GeminiService>();
 builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GenerateProductContentRequestValidator>();
 // TB-156: semantic-search embedding client (reuses the "GeminiClient" HttpClient above).
 builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
+// TB-156: self-healing worker that embeds any product left without an embedding (create-time
+// failures, seeded rows, imports). Defaults are sensible when the section is absent.
+builder.Services.Configure<EmbeddingWorkerSettings>(builder.Configuration.GetSection("EmbeddingWorker"));
+builder.Services.AddHostedService<EmbeddingBackfillWorker>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
