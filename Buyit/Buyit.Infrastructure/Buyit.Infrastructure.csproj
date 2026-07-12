@@ -15,6 +15,12 @@
     <Folder Include="Repositories\" />
   </ItemGroup>
 
+  <!-- RAG: bundle the feature-documentation corpus so IDocumentationService can read it from the
+       app base directory at ingest time. Copied into every referencing project's output (API, MCP). -->
+  <ItemGroup>
+    <Content Include="Documentation\**\*.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- TB-156: expose internal helpers (e.g. ProductService.CosineSimilarity) to the test project. -->
   <ItemGroup>
     <InternalsVisibleTo Include="Buyit.Tests" />
