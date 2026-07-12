@@ -177,6 +177,10 @@ builder.Services.AddScoped<IValidator<GenerateProductContentRequest>, GeneratePr
 builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
+// Dev-only demo-data seeder (DevSeedController). Registering it is harmless — the endpoint
+// is gated to the Development environment, so it does nothing in staging/production.
+builder.Services.AddScoped<IDataSeedService, DataSeedService>();
+
 // --- TB-97: AI chatbot (Gemini <-> Buyit.MCP function-calling bridge) ---
 builder.Services.Configure<McpSettings>(builder.Configuration.GetSection("Mcp"));
 builder.Services.Configure<ChatHistorySettings>(builder.Configuration.GetSection("ChatHistory"));
