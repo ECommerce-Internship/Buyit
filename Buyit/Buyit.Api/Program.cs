@@ -47,7 +47,9 @@ builder.Host.UseSerilog((context, services, config) =>
         .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
         .Enrich.FromLogContext()
         .WriteTo.Console()
-        .WriteTo.Seq(context.Configuration["Seq:ServerUrl"] ?? "http://localhost:5341");
+        .WriteTo.Seq(
+        context.Configuration["Seq:ServerUrl"] ?? "http://localhost:5341",
+        apiKey: context.Configuration["Seq:ApiKey"]);
 });
 
 // Register Services
